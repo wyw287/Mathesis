@@ -58,56 +58,84 @@ export function installIndexedDB(opts: FakeIdbOptions = {}) {
         r.onerror?.();
         return;
       }
-      r.result = produce();
+      try {
+        r.result = produce();
+      } catch (e) {
+        // 真实的 IndexedDB 用 error 事件报告失败,而不是让异常炸穿到这里
+        r.error = e;
+        r.onerror?.();
+        return;
+      }
       r.onsuccess?.();
     });
     return r;
   };
 
-  const storeHandle = (name: string) => {
-    const data = () => {
-      const m = stores.get(name);
-      // 真实的 IndexedDB 在 store 不存在时抛 NotFoundError。替身也抛,
-      // 升级没把 store 建出来才会当场暴露,而不是静默读写一个空 Map。
-      if (!m) throw new Error(`object store "${name}" 不存在`);
-      return m;
-    };
-    return {
-      get: (k: string) => {
-        ops.push(`get ${name}`);
-        return makeRequest(() => data().get(k));
-      },
-      put: (v: string, k: string) => {
-        ops.push(`put ${name}`);
-        if (name === KV_STORE) writes.push(v);
-        return makeRequest(() => void data().set(k, v), opts.failWrites ? new Error('写入失败') : undefined);
-      },
-      delete: (k: string) => {
-        ops.push(`delete ${name}`);
-        return makeRequest(() => void data().delete(k));
-      },
-      getAllKeys: () => {
-        ops.push(`keys ${name}`);
-        return makeRequest(() => [...data().keys()]);
-      },
-    };
-  };
+  /** 当前打开着的连接。真实的 IndexedDB 允许同时开多个,各自独立关闭。 */
+  const connections = new Set<any>();
 
-  const db: any = {
-    objectStoreNames: { contains: (n: string) => stores.has(n) },
-    createObjectStore: (n: string) => {
-      stores.set(n, new Map());
-      return storeHandle(n);
-    },
-    transaction: (name: string) => {
-      if (!stores.has(name)) throw new Error(`object store "${name}" 不存在`);
-      const tx: any = { objectStore: () => storeHandle(name) };
-      // 提交是宏任务,请求回调是微任务 —— 真实 IDB 也是这个顺序,
-      // 而产品代码要靠它才能在这两者之间把 oncomplete 挂上
-      setTimeout(() => tx.oncomplete?.(), 0);
-      return tx;
-    },
-    close: () => {},
+  /**
+   * 造一条**独立的连接**。
+   *
+   * 每次 open 都给一个新的,而不是全库共用一个对象 —— 这一点是必须的:
+   * 产品代码在版本升级时会关掉连接,而共用对象的话"关掉"看起来毫无效果,
+   * 「连接关了但缓存的后端还拿着它」那个 bug 就永远测不出来。
+   */
+  const makeConnection = () => {
+    let closed = false;
+
+    const storeHandle = (name: string) => {
+      const data = () => {
+        if (closed) throw new Error('InvalidStateError: 连接已关闭');
+        const m = stores.get(name);
+        // 真实的 IndexedDB 在 store 不存在时抛 NotFoundError。替身也抛,
+        // 升级没把 store 建出来才会当场暴露,而不是静默读写一个空 Map。
+        if (!m) throw new Error(`object store "${name}" 不存在`);
+        return m;
+      };
+      return {
+        get: (k: string) => {
+          ops.push(`get ${name}`);
+          return makeRequest(() => data().get(k));
+        },
+        put: (v: string, k: string) => {
+          ops.push(`put ${name}`);
+          if (name === KV_STORE) writes.push(v);
+          return makeRequest(() => void data().set(k, v), opts.failWrites ? new Error('写入失败') : undefined);
+        },
+        delete: (k: string) => {
+          ops.push(`delete ${name}`);
+          return makeRequest(() => void data().delete(k));
+        },
+        getAllKeys: () => {
+          ops.push(`keys ${name}`);
+          return makeRequest(() => [...data().keys()]);
+        },
+      };
+    };
+
+    const db: any = {
+      objectStoreNames: { contains: (n: string) => stores.has(n) },
+      createObjectStore: (n: string) => {
+        stores.set(n, new Map());
+        return storeHandle(n);
+      },
+      transaction: (name: string) => {
+        if (closed) throw new Error('InvalidStateError: 连接已关闭');
+        if (!stores.has(name)) throw new Error(`object store "${name}" 不存在`);
+        const tx: any = { objectStore: () => storeHandle(name) };
+        // 提交是宏任务,请求回调是微任务 —— 真实 IDB 也是这个顺序,
+        // 而产品代码要靠它才能在这两者之间把 oncomplete 挂上
+        setTimeout(() => tx.oncomplete?.(), 0);
+        return tx;
+      },
+      close: () => {
+        closed = true;
+        connections.delete(db);
+      },
+    };
+    connections.add(db);
+    return db;
   };
 
   (globalThis as any).indexedDB = {
@@ -120,11 +148,12 @@ export function installIndexedDB(opts: FakeIdbOptions = {}) {
           return;
         }
         if (reqVersion < version) {
+          // 真实的 IndexedDB 会抛 VersionError —— 旧版本的代码打不开新版本的库
           r.error = new Error('VersionError');
           r.onerror?.();
           return;
         }
-        r.result = db;
+        r.result = makeConnection();
         if (reqVersion > version) {
           r.oldVersion = version;
           version = reqVersion;
@@ -145,9 +174,29 @@ export function installIndexedDB(opts: FakeIdbOptions = {}) {
     ops,
     /** 当前版本号,升级用例断言它。 */
     version: () => version,
+    /**
+     * 模拟"另一个标签页要用更高的版本打开"。
+     *
+     * 真实的 IndexedDB 会对每一条旧连接触发 `versionchange`;产品代码在那一刻
+     * 必须关掉自己的连接,而且必须把**拿着那条连接的东西**一起放掉。
+     * 这是唯一能把这个场景造出来的入口。
+     */
+    raiseVersionChange: () => {
+      for (const db of [...connections]) db.onversionchange?.();
+    },
+    /**
+     * 把库的版本推到当前代码声明的版本**前面**去。
+     *
+     * 用来造"这个页面已经落后了"的局面:它重开时会拿到 VersionError,
+     * 只能退回内存 —— 而那一步必须被界面知道。
+     */
+    bumpVersionAhead: () => {
+      version += 1;
+    },
     uninstall: () => {
       closeDb();
       resetImageStore();
+      connections.clear();
       delete (globalThis as any).indexedDB;
     },
   };

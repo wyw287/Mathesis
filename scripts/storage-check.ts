@@ -223,6 +223,50 @@ async function main() {
     idb.uninstall();
   }
 
+  console.log('\n连接被别的标签页的版本升级关掉时');
+
+  {
+    // 这一条盯的是"让路"这个修法自己引进来的 bug:连接关掉了,但**缓存着它的
+    // backend** 还拿着一个已关闭的库。之后每一次 db.transaction() 都抛
+    // InvalidStateError,被 doFlush 吞成一条 console.warn ——
+    // 写入永久失败,而顶栏一切正常。
+    const idb = installIndexedDB();
+    const s = createPersistStorage();
+
+    await s.getItem('probe'); // 解析后端
+    s.setItem('k', val(1));
+    await s.flush();
+    ok('先正常写进去了', idb.data.get('k')?.includes('分片 1') === true, String(idb.data.get('k')));
+
+    idb.data.clear();
+    idb.raiseVersionChange(); // 别的标签页要用新版本
+
+    s.setItem('k', val(2));
+    await s.flush();
+    ok('连接被关掉之后,写入不能静默失败', idb.data.get('k')?.includes('分片 2') === true, String(idb.data.get('k')));
+    idb.uninstall();
+  }
+
+  {
+    // 重开失败(本页版本落后)时只能落回内存 —— 但那必须**被界面知道**,
+    // 否则就是"默默降级",和这个项目一开始要防的是同一件事。
+    const idb = installIndexedDB();
+    const seen: string[] = [];
+    const s = createPersistStorage({ onTierChange: (t) => seen.push(t) });
+
+    await s.getItem('probe');
+    ok('落在 IndexedDB 上时报告一次', s.tier() === 'indexeddb' && seen.includes('indexeddb'), seen.join(','));
+
+    idb.bumpVersionAhead(); // 这个页面已经落后了
+    idb.raiseVersionChange();
+
+    s.setItem('k', val(1));
+    await s.flush();
+    ok('重开失败后退回内存', s.tier() === 'memory', s.tier());
+    ok('而且把这次变化报了出去(界面才能提示)', seen.includes('memory'), seen.join(','));
+    idb.uninstall();
+  }
+
   console.log(`\n${pass} 通过, ${fail} 失败\n`);
   process.exit(fail ? 1 : 0);
 }

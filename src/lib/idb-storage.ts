@@ -21,7 +21,7 @@
  * 连接、事务原语和降级后端都在 `lib/idb.ts`,和图片存储共用。
  */
 import type { PersistStorage, StorageValue } from 'zustand/middleware';
-import { KV_STORE, idbBackend, memoryBackend, openDb, type Backend } from './idb';
+import { KV_STORE, idbBackend, memoryBackend, onConnectionDropped, openDb, type Backend } from './idb';
 
 /** 写入合并窗口。流式回复一秒能产生几十次 setState,合并掉绝大多数。 */
 const FLUSH_DELAY_MS = 400;
@@ -37,15 +37,40 @@ export interface PersistStorageHandle<S> extends PersistStorage<S> {
 
 // ------------------------------------------------------------------ 主体
 
-export function createPersistStorage<S>(): PersistStorageHandle<S> {
+export interface PersistStorageOptions {
+  /**
+   * 落点变了。
+   *
+   * 存在的理由:在此之前 `tier` 只在**水合那一刻**被读一次(由 session 的
+   * `finishHydration` 取走),之后再变也没人知道。而它确实会变 —— 连接被别的
+   * 标签页的版本升级关掉、重开失败退回内存,就是一条。那时界面还显示一切正常,
+   * 而内容已经不落盘了。这个项目的规矩是"降级不能默默发生",那就得让它能被看见。
+   */
+  onTierChange?: (tier: StorageTier) => void;
+}
+
+export function createPersistStorage<S>(opts: PersistStorageOptions = {}): PersistStorageHandle<S> {
   let tier: StorageTier = 'memory';
   let ready: Promise<Backend> | null = null;
+
+  // 连接被关掉时,把缓存的 backend 一并放掉。少了这一步,它会永久指向一个
+  // 已关闭的库,之后每一次写入都静默失败 —— 详见 lib/idb.ts 的说明。
+  // 下一次 backendReady() 会重新 openDb();如果因此退回内存,由 onTierChange 报出去。
+  onConnectionDropped(() => {
+    ready = null;
+  });
+
+  function setTier(t: StorageTier): void {
+    if (t === tier) return;
+    tier = t;
+    opts.onTierChange?.(t);
+  }
 
   async function resolveBackend(): Promise<Backend> {
     if (typeof indexedDB !== 'undefined') {
       try {
         const db = await openDb();
-        tier = 'indexeddb';
+        setTier('indexeddb');
         // 申请持久化存储。否则浏览器在存储压力下会驱逐 IndexedDB ——
         // 而这是用户唯一的一份学习记录。
         void navigator.storage?.persist?.().catch(() => {});
@@ -56,7 +81,7 @@ export function createPersistStorage<S>(): PersistStorageHandle<S> {
     }
     // 走到这里说明内容**不会**被保存。tier() 会告诉界面,由它明确提示用户,
     // 不能默默降级 —— 那等于让用户以为自己在被保存。
-    tier = 'memory';
+    setTier('memory');
     return memoryBackend();
   }
 

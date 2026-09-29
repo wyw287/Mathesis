@@ -23,7 +23,7 @@
  * 和 `idb-storage` 的 flush「绝不向上抛」正相反,那个是后台写入。
  * 其余几个只记日志:它们跑在渲染路径和回收路径上,抛出去没人接。
  */
-import { BLOB_STORE, idbBackend, idbKeys, memoryBackend, openDb, type Backend } from './idb';
+import { BLOB_STORE, idbBackend, idbKeys, memoryBackend, onConnectionDropped, openDb, type Backend } from './idb';
 
 /** 缓存条数上限。超出只丢缓存,`getDataUrl` 会回 IDB 再读一次。 */
 const CACHE_MAX = 24;
@@ -50,6 +50,13 @@ function cachePut(id: string, dataUrl: string): void {
 }
 
 let ready: Promise<Backend> | null = null;
+
+// 和 idb-storage 同理:连接被别的标签页的版本升级关掉时,这个 backend 会失效。
+// 下一次取用时重新解析。图片这一侧失败是会抛的(见上面那段),但一直指着一个
+// 已关闭的库同样糟糕 —— 会变成"每次贴图都报一个看不懂的错"。
+onConnectionDropped(() => {
+  ready = null;
+});
 
 async function resolveBackend(): Promise<Backend> {
   if (typeof indexedDB !== 'undefined') {

@@ -87,6 +87,36 @@ export async function idbKeys(db: IDBDatabase, store: string): Promise<string[]>
 
 let conn: Promise<IDBDatabase> | null = null;
 
+/**
+ * 连接被关掉时要通知谁。
+ *
+ * 这个模块只负责"连接",而**拿着连接的 backend 缓存在别人那里** ——
+ * `idb-storage` 和 `blob-store` 各自记了一份 `ready`。连接一关,那些 backend
+ * 就永久指向一个已经关闭的库:之后每一次 `db.transaction(...)` 都抛
+ * `InvalidStateError`,而 persist 那边是**静默吞掉**的(只留一条 console.warn),
+ * 于是写入永久失败、界面却毫无表示。
+ *
+ * 所以关连接的时候必须回头把它们也放掉 —— 这里留一个订阅口,避免
+ * `idb.ts` 反过来 import 那两个模块(那会成环)。
+ */
+const droppedListeners: Array<() => void> = [];
+
+export function onConnectionDropped(fn: () => void): void {
+  droppedListeners.push(fn);
+}
+
+function dropConnection(): void {
+  conn = null;
+  for (const fn of droppedListeners) {
+    // 一个订阅者出问题不该让其他人的清理也停在那儿
+    try {
+      fn();
+    } catch (e) {
+      console.warn('[mathesis] 释放存储连接时出错', e);
+    }
+  }
+}
+
 function openOnce(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const r = indexedDB.open(DB_NAME, DB_VERSION);
@@ -102,9 +132,13 @@ function openOnce(): Promise<IDBDatabase> {
       // 别的标签页要升级时让路。没有这一条,那个标签页会一直占着连接,
       // 把新页面挡在 onblocked 上 —— 也就是把"用旧版本的那个页面"变成
       // "打开新版本就丢数据"。
+      //
+      // 但**让路不等于完事**:连接一关,缓存着它的那些 backend 就全废了,
+      // 必须一并放掉(dropConnection 就是干这个的)。少了那一步,这个"修法"
+      // 自己会变成一个新 bug:写入从此静默失败,直到刷新。
       db.onversionchange = () => {
         db.close();
-        conn = null;
+        dropConnection();
       };
       resolve(db);
     };

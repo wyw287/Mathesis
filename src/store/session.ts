@@ -438,7 +438,18 @@ const DEFAULT_SETTINGS: Settings = {
  */
 const FIRST_SESSION = blankSession(uid());
 
-const persistStorage = createPersistStorage<PersistedShape>();
+/**
+ * 落点变化要反映到界面上,否则"降级"就是静默的。
+ *
+ * 走这个中转变量而不是在回调里直接引用 `useSession`:那个 const 在下面才定义,
+ * 而水合的解析可能早于模块求值结束。水合那一刻那次变化由 `finishHydration`
+ * 自己设置,所以这里漏掉一次也不会错。
+ */
+let publishTier: ((t: StorageTier) => void) | null = null;
+
+const persistStorage = createPersistStorage<PersistedShape>({
+  onTierChange: (t) => publishTier?.(t),
+});
 
 export const useSession = create<SessionState>()(
   persist(
@@ -732,3 +743,6 @@ export const useSession = create<SessionState>()(
     },
   ),
 );
+
+// 模块求值到这里,`useSession` 一定存在了 —— 之后落点再变就能实时反映到界面上。
+publishTier = (t: StorageTier) => useSession.setState({ storageTier: t });

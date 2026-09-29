@@ -155,6 +155,26 @@ async function main() {
     ok('内存档下列不出 id(没什么可回收的)', (await listImageIds()).length === 0);
   }
 
+  console.log('\n连接被别的标签页的版本升级关掉时');
+
+  {
+    // 图片库这边失败是会抛的,所以症状不是"静默",而是"之后每次贴图都报一个
+    // 看不懂的错"。同样得在连接被关掉时把缓存的后端放掉。
+    const idb = installIndexedDB();
+    await putImage('a', IMG);
+    idb.raiseVersionChange();
+
+    let err: Error | null = null;
+    try {
+      await putImage('b', IMG);
+    } catch (e) {
+      err = e as Error;
+    }
+    ok('连接被关掉之后仍然存得进去', err === null, String(err));
+    ok('而且读得回来', (await getDataUrl('b')) === IMG);
+    idb.uninstall();
+  }
+
   console.log('\n缩放几何');
 
   {
