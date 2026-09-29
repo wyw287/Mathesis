@@ -134,5 +134,66 @@ for (const [name, input] of [
   })());
 }
 
+console.log('\nMarkdown 表格');
+
+{
+  const h = md('| 甲 | 乙 |\n|---|---|\n| 1 | 2 |');
+  ok('基本表格能渲染', h.includes('<table') && h.includes('<th'), h);
+  ok('表头和数据行都在', h.includes('<thead') && h.includes('<tbody'), h);
+  ok('单元格内容对', h.includes('甲') && h.includes('乙') && h.includes('1'), h);
+  ok('不会再吐出裸的管道符', !h.includes('|---'), h);
+}
+
+{
+  // 首尾管道符可省略(GitHub 风格两种都接受)
+  const h = md('甲 | 乙\n--- | ---\n1 | 2');
+  ok('省略首尾管道符也认', h.includes('<table'), h);
+}
+
+{
+  const h = md('| 左 | 中 | 右 |\n|:---|:---:|---:|\n| a | b | c |');
+  ok('对齐方式被解析', h.includes('text-align:left') && h.includes('text-align:center') && h.includes('text-align:right'), h);
+}
+
+{
+  // 单元格里的行内公式和粗体照常工作
+  const h = md('| 形式 | 含义 |\n|---|---|\n| $Ax = b$ | 系数表 |\n| **线性映射** | 本身 |');
+  ok('单元格里的公式容器在', h.includes('latex-inline'), h);
+  ok('单元格里的粗体在', h.includes('<strong>'), h);
+}
+
+{
+  // 这一条最要紧:正文里的绝对值符号不能被当成表格。
+  // 判据要求下一行是分隔行,所以 `|x|` 不会触发。
+  const h = md('当 $|x| < \\delta$ 时\n\n以及 |x| 单独出现的时候');
+  ok('正文里的 |x| 不被当成表格', !h.includes('<table'), h);
+  ok('而且内容原样保留', h.includes('时'), h);
+  ok('单独的 |x| 也不被当成表格', !md('这里 |x| 是绝对值').includes('<table'));
+}
+
+{
+  // 表格后面接段落,段落不能被吞掉
+  const h = md('| a | b |\n|---|---|\n| 1 | 2 |\n\n表格之后的段落。');
+  ok('表格之后的段落仍在', h.includes('表格之后的段落'), h);
+}
+
+{
+  // 表格前面有段落,段落要被正确截断
+  const h = md('前面这句话。\n| a | b |\n|---|---|\n| 1 | 2 |');
+  ok('表格之前的段落没被表格吞掉', h.includes('前面这句话'), h);
+  ok('同时表格也渲染了', h.includes('<table'), h);
+}
+
+{
+  // 残缺的行数(列数不齐)不能崩
+  const ragged = md('| a | b | c |\n|---|---|---|\n| 1 |\n| 1 | 2 | 3 |');
+  ok('列数不齐时不崩', ragged.includes('<table'), ragged);
+}
+
+{
+  const h = md('| 单列 |\n|---|\n| 只有一个 |');
+  ok('单列表格也能渲染', h.includes('<table'), h);
+}
+
 console.log(`\n${pass} 通过, ${fail} 失败\n`);
 process.exit(fail ? 1 : 0);

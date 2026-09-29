@@ -94,7 +94,10 @@ type Block =
   | { t: 'ol'; items: string[] }
   | { t: 'quote'; lines: string[] }
   | { t: 'code'; text: string }
-  | { t: 'hr' };
+  | { t: 'hr' }
+  | { t: 'table'; head: string[]; align: Align[]; rows: string[][] };
+
+type Align = 'left' | 'center' | 'right';
 
 const RE_HR = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
 const RE_FENCE = /^\s*```/;
@@ -102,10 +105,44 @@ const RE_UL = /^\s*[-*+]\s+/;
 const RE_OL = /^\s*\d+[.)]\s+/;
 const RE_QUOTE = /^\s*>\s?/;
 
+/** 表格行按 `|` 切,并去掉首尾那两个管道符。 */
+function splitRow(line: string): string[] {
+  return line
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((c) => c.trim());
+}
+
+/** 分隔行:`|---|---|`、`| :--- | ---: |` 都算。 */
+function isSeparatorRow(line: string): boolean {
+  if (!line.includes('-')) return false;
+  const cells = splitRow(line);
+  return cells.length > 0 && cells.every((c) => /^:?-{2,}:?$/.test(c));
+}
+
+/**
+ * 这一行是不是一张表的开头。
+ *
+ * 判据是**下一行必须是分隔行** —— 这是 GitHub 风格表格的硬要求,拿它当判据
+ * 就不会把正文里偶然出现的 `|`(比如绝对值符号 `|x|`)误判成表格。
+ */
+function startsTable(lines: string[], i: number): boolean {
+  return lines[i]!.includes('|') && i + 1 < lines.length && isSeparatorRow(lines[i + 1]!);
+}
+
 /** 判断这一行是不是某个块级结构的开头(用于决定段落在哪里断)。 */
-function startsBlock(l: string): boolean {
+function startsBlock(lines: string[], i: number): boolean {
+  const l = lines[i]!;
   return (
-    RE_FENCE.test(l) || RE_HR.test(l) || RE_UL.test(l) || RE_OL.test(l) || RE_QUOTE.test(l) || /^#{1,6}\s+/.test(l)
+    RE_FENCE.test(l) ||
+    RE_HR.test(l) ||
+    RE_UL.test(l) ||
+    RE_OL.test(l) ||
+    RE_QUOTE.test(l) ||
+    /^#{1,6}\s+/.test(l) ||
+    startsTable(lines, i)
   );
 }
 
@@ -127,6 +164,23 @@ function parseBlocks(src: string): Block[] {
       while (i < lines.length && !RE_FENCE.test(lines[i])) buf.push(lines[i++]);
       i++; // 吃掉收尾的 ```
       out.push({ t: 'code', text: buf.join('\n') });
+      continue;
+    }
+
+    // 表格要排在分隔线和段落之前:分隔行 `|---|---|` 里没有单独的 ---,
+    // 但它的判据要用到下一行,不能等到段落分支把行吞掉之后再判断
+    if (startsTable(lines, i)) {
+      const head = splitRow(line);
+      const align: Align[] = splitRow(lines[i + 1]!).map((c) =>
+        c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : 'left',
+      );
+      i += 2;
+      const rows: string[][] = [];
+      // 数据行一直到空行或不再含 `|` 为止
+      while (i < lines.length && lines[i]!.trim() && lines[i]!.includes('|')) {
+        rows.push(splitRow(lines[i++]!));
+      }
+      out.push({ t: 'table', head, align, rows });
       continue;
     }
 
@@ -166,7 +220,7 @@ function parseBlocks(src: string): Block[] {
     }
 
     const buf: string[] = [];
-    while (i < lines.length && lines[i].trim() && !startsBlock(lines[i])) buf.push(lines[i++]);
+    while (i < lines.length && lines[i]!.trim() && !startsBlock(lines, i)) buf.push(lines[i++]!);
     out.push({ t: 'p', lines: buf });
   }
 
@@ -220,5 +274,34 @@ function renderBlock(b: Block, i: number): ReactNode {
       );
     case 'hr':
       return <hr key={i} />;
+    case 'table':
+      // 表格外面套一层可横向滚动的壳:数学内容的表格经常很宽,
+      // 撑破对话栏比滚动难看多了
+      return (
+        <div key={i} className="md-table-wrap">
+          <table className="md-table">
+            <thead>
+              <tr>
+                {b.head.map((cell, j) => (
+                  <th key={j} style={{ textAlign: b.align[j] ?? 'left' }}>
+                    {inline(cell, `tb${i}-h${j}`)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {b.rows.map((row, k) => (
+                <tr key={k}>
+                  {b.head.map((_, j) => (
+                    <td key={j} style={{ textAlign: b.align[j] ?? 'left' }}>
+                      {inline(row[j] ?? '', `tb${i}-${k}-${j}`)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
   }
 }

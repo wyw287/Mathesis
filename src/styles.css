@@ -1775,3 +1775,46 @@ button {
   background: #f2fbf5;
   border-color: #a8d8bd;
 }
+
+/* ------------------------------------------------------------ Markdown 表格 */
+
+/* 数学内容的表格经常很宽。撑破对话栏比能横向滚动难看多了。 */
+.md-table-wrap {
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.md-table {
+  border-collapse: collapse;
+  font-size: 13.5px;
+  width: 100%;
+}
+
+.md-table th,
+.md-table td {
+  border: 1px solid var(--border);
+  padding: 5px 10px;
+  vertical-align: top;
+  line-height: 1.5;
+}
+
+.md-table th {
+  background: #fcfbf9;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.md-table tbody tr:nth-child(even) {
+  background: #fdfcfb;
+}
+
+/* 单元格里的段落不要再撑开行高 */
+.md-table td p,
+.md-table th p {
+  margin: 0;
+}
+
+/* 单元格里行内公式很多时,别让它们把行撑得过高 */
+.md-table .katex {
+  font-size: 0.95em;
+}
