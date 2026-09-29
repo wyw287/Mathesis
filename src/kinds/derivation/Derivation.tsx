@@ -1,7 +1,7 @@
 import { useState } from 'react';
-import type { CanvasEvent, DerivationSpec, GapKind } from '../types/artifact';
-import { Latex } from './Latex';
-import { Markdown, MathBlock } from './Markdown';
+import type { CanvasEvent, DerivationSpec, GapKind } from '../../types/artifact';
+import { Latex } from '../../renderers/Latex';
+import { Markdown, MathBlock } from '../../renderers/Markdown';
 
 interface Props {
   spec: DerivationSpec;

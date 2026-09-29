@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import type { CanvasEvent, HtmlSpec } from '../types/artifact';
+import type { CanvasEvent, HtmlSpec } from '../../types/artifact';
 
 interface Props {
   spec: HtmlSpec;

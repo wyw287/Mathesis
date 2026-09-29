@@ -286,3 +286,98 @@ interface ToolResult<S> {
 SymPy 推迟不是因为它不重要,而是因为**符号计算在第二阶段才能发挥价值**——
 它真正的用途是"验证模型给的这一步推导对不对",那需要先有推导渲染器和
 可信的表达式交换格式。顺序反了会白做。
+
+---
+
+## 10. 扩展:新增一个 kind
+
+代码是这样组织的:每种 artifact 的**全部东西**都在 `src/kinds/<kind>/` 一个目录里 ——
+spec 校验、标题生成、渲染器、教学工具。
+
+```
+src/kinds/
+├── module.ts        KindModule 接口(框架契约)
+├── registry.ts      显式列表 + 派生的 parseSpec / titleFor / 迁移 + 完整性断言
+├── plot2d/          index.tsx(校验 + 标题 + 工具)、Plot2D.tsx(渲染器)、palette.ts
+├── derivation/      index.ts、Derivation.tsx
+├── quiz/            index.ts、Quiz.tsx
+└── html/            index.ts、HtmlBlock.tsx
+```
+
+所以新增一种 artifact 只需要:
+
+| # | 做什么 | 漏了会怎样 |
+|---|---|---|
+| 1 | 在 `types/artifact.ts` 的 `ArtifactSpec` 联合里加上新 Spec 类型 | 后面都用不了这个类型 |
+| 2 | 新写 `src/kinds/<kind>/`,导出一个 `KindModule` | —— |
+| 3 | 在 `kinds/registry.ts` 的 `KIND_MODULES` 里加一行 | **编译报错**,指向那一行 |
+
+**`components/ArtifactCard.tsx`、`store/session.ts`、`tools/index.ts` 一行都不用动。**
+前两个查注册表分派,第三个从注册表组装工具列表 —— 它们都不认识任何具体 kind。
+
+### 为什么是显式列表,而不是自动发现
+
+自注册(`import.meta.glob` 或模块副作用)看起来更省事,但它和穷尽性检查在根本上是对立的:
+
+- tagged union 的全部价值,来自编译器**知道全部成员**
+- 自注册的意义,是编译器**不知道**有什么
+
+想同时要两者,只能靠 declaration merging 补类型。而类型增强(编译期,文件在 src/ 里就生效)
+和运行时注册(副作用,被 import 才生效)是**两套独立机制** —— 一个文件完全可以
+"类型上存在、运行时不存在",编译器对此完全沉默。后果是:TS 认为某个 kind 合法、
+`parseSpec` 也放行,画布上却是一张空白卡片,没有任何线索。
+
+更本质地说:想在运行时校验"类型与运行时是否一致",必须在运行时**枚举类型的成员**。
+而运行时拿不到类型,只能靠一个显式列表 —— **那个列表,就是这里省不掉的那一行。**
+
+### 完整性断言
+
+`registry.ts` 里有一行:
+
+```ts
+type RegisteredKind = (typeof KIND_MODULES)[number]['kind'];
+type MissingFromRegistry = Exclude<ArtifactKind, RegisteredKind>;
+export const REGISTRY_IS_COMPLETE: MissingFromRegistry extends never ? true : false = true;
+```
+
+少注册一个 kind 时,`MissingFromRegistry` 会变成那个 kind(而不是 `never`),
+`= true` 那行立刻报错。**这是整个链路上唯一的一处检查,却覆盖了全部消费方** ——
+解析、标题、渲染、工具都是从同一个列表派生的。
+
+### 怎么验证自己改对了
+
+临时往 `ArtifactSpec` 联合里塞一个假的 kind,跑 `tsc --noEmit`。
+应该**恰好报一处错**,而且指向 `kinds/registry.ts` 的 `REGISTRY_IS_COMPLETE`。
+
+```
+kinds/registry.ts(44,14): error TS2322: Type 'true' is not assignable to type 'false'.
+```
+
+- 报零处 → 断言被删了或写错了,整个检查失效
+- 报多处 → 说明有地方绕过了注册表,在做 kind 特判
+
+验证完记得还原。
+
+### 唯一没有编译期保证的地方
+
+新 kind 必须**有人产出它** —— 也就是要有工具,否则模型永远造不出来。
+这属于数据流,类型系统管不了。
+
+注意 `KindModule.tool` 是可选的:`html` 就没有工具。它是 Tier 2 逃生舱口
+(见 §4),只在 plot2d / derivation / quiz 确实表达不了时才该出现。给它一个
+一等公民的工具,模型会当成常规选项来用,而 Tier 2 的 spec 不可校验、不可引用、
+不可局部编辑。降级路径下模型仍然可以产出它。
+
+### 判断该不该新增 kind
+
+先问一句:能不能用现有的 kind 表达?
+
+- 想画另一种图 → 给 `plot2d` 加一个 `Curve` 变体。`Curve` 本身就是联合,
+  扩展它比新增 kind 便宜得多,而且完全不用碰注册表。
+- 想加一种题型 → 优先扩展 `QuizSpec`。
+- 只有当**渲染方式、交互方式、生命周期都不同**时才新增 kind。`html` 之所以
+  独立成 kind,是因为它要跑在 iframe 沙箱里、交互要走 postMessage,
+  和其余三个没有共性。
+
+每新增一个 kind,都要能渲染**所有历史版本存下来的** kind(见 §6)。这是契约演进的
+真实成本,不是免费的。

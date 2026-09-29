@@ -6,10 +6,8 @@ import {
   type CanvasArtifact,
   type CanvasEvent,
   CURRENT_SCHEMA_VERSION,
-  migrateArtifact,
   toIndexEntry,
 } from '../types/artifact';
-import { titleFor } from '../tools/specs';
 
 export interface Settings {
   baseUrl: string;
@@ -56,7 +54,14 @@ interface SessionState {
 
   setSettings: (patch: Partial<Settings>) => void;
   addArtifact: (spec: ArtifactSpec, title: string, origin: 'ai' | 'user', refs?: string[]) => string;
-  patchArtifact: (id: string, patch: Partial<ArtifactSpec>) => void;
+  /**
+   * title 由调用方给出,而不是在这里算。
+   *
+   * 因为算标题要认识所有 kind,那会把 store 拖去依赖注册表;而渲染器又要读 store,
+   * 于是形成 store → 注册表 → kind 模块 → store 的环。
+   * 调用方(工具层)本来就已经拿到了新 spec,顺手算一下标题是最自然的。
+   */
+  patchArtifact: (id: string, patch: Partial<ArtifactSpec>, title: string) => void;
   removeArtifact: (id: string) => void;
   setParam: (id: string, name: string, value: number) => void;
   paramScope: (id: string) => Record<string, number>;
@@ -82,23 +87,6 @@ const DEFAULT_SETTINGS: Settings = {
   model: 'deepseek-chat',
   toolsEnabled: true,
 };
-
-/**
- * title 是 spec 的**派生数据**,但按契约它又是 artifact 的持久字段
- * (它是发给模型的画布目录里唯一的内容标识)。
- *
- * 只存不算的后果有两个,都真实发生过:
- *  · 改了 titleFor 的生成逻辑后,旧 artifact 永远停在旧标题上
- *  · AI 用 edit_artifact 改了内容,标题不跟着变,目录里写的是过期描述
- *
- * 所以凡是 spec 变动的地方(载入、patch)都重算一次。
- * 纯函数、开销可忽略,不值得为它维护增量更新。
- */
-export function refreshArtifact(a: CanvasArtifact): CanvasArtifact {
-  const migrated = migrateArtifact(a);
-  const title = titleFor(migrated.spec);
-  return title === migrated.title ? migrated : { ...migrated, title };
-}
 
 export const useSession = create<SessionState>()(
   persist(
@@ -133,13 +121,13 @@ export const useSession = create<SessionState>()(
         return id;
       },
 
-      patchArtifact: (id, patch) =>
+      patchArtifact: (id, patch, title) =>
         set((s) => ({
           artifacts: s.artifacts.map((a) => {
             if (a.id !== id) return a;
             // 浅合并:数组整体替换。深合并对 curves 这类数组语义不明确。
             const spec = { ...a.spec, ...patch } as ArtifactSpec;
-            return { ...a, spec, title: titleFor(spec), rev: a.rev + 1, updatedAt: Date.now() };
+            return { ...a, spec, title, rev: a.rev + 1, updatedAt: Date.now() };
           }),
         })),
 
@@ -200,15 +188,15 @@ export const useSession = create<SessionState>()(
         runtime: s.runtime,
         messages: s.messages,
       }),
-      // 载入时重算标题并跑 schema 迁移。
-      // 这两件事只能在这里做 —— 它们是用来覆盖「旧版本代码存下来的数据」的,
-      // 而这里,是唯一能拿到那批数据的地方。
+      // 不做标题重算和 schema 迁移 —— 那两件事需要认识所有 kind,由 registry 负责。
+      // 迁移在 App 挂载时跑一次(见 reconcile())。放在这里会形成
+      // store → 注册表 → kind 模块 → store 的环。
       merge: (persisted, current) => {
         const p = (persisted ?? {}) as Partial<SessionState>;
         return {
           ...current, // 动作函数必须来自 current,不能被持久化数据盖掉
           settings: { ...current.settings, ...(p.settings ?? {}) },
-          artifacts: (p.artifacts ?? []).map(refreshArtifact),
+          artifacts: p.artifacts ?? [],
           runtime: p.runtime ?? {},
           messages: p.messages ?? [],
           // 易失字段一律取初值,不接受任何残留

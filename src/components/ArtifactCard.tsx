@@ -1,11 +1,7 @@
 import { useCallback } from 'react';
-import { useShallow } from 'zustand/react/shallow';
+import { kindModule } from '../kinds/registry';
 import { useSession } from '../store/session';
 import type { CanvasArtifact, CanvasEvent } from '../types/artifact';
-import { Derivation } from '../renderers/Derivation';
-import { HtmlBlock } from '../renderers/HtmlBlock';
-import { Plot2D } from '../renderers/Plot2D';
-import { Quiz } from '../renderers/Quiz';
 
 const KIND_LABEL: Record<string, string> = {
   plot2d: '图像',
@@ -39,14 +35,18 @@ export function ArtifactCard({ artifact, focused }: Props) {
   return (
     <section className={focused ? 'artifact focused' : 'artifact'} onMouseDown={setFocus}>
       <header className="artifact-head">
-        <span className={`kind kind-${artifact.spec.kind}`}>{KIND_LABEL[artifact.spec.kind] ?? artifact.spec.kind}</span>
+        <span className={`kind kind-${artifact.spec.kind}`}>
+          {KIND_LABEL[artifact.spec.kind] ?? artifact.spec.kind}
+        </span>
         <h3 className="artifact-title">{artifact.title}</h3>
         <span className="artifact-id" title="对话里可以按这个 id 引用它">
           {artifact.id.slice(0, 4)}
         </span>
-        {artifact.rev > 1 && <span className="rev" title={`已修订 ${artifact.rev - 1} 次`}>
-          r{artifact.rev}
-        </span>}
+        {artifact.rev > 1 && (
+          <span className="rev" title={`已修订 ${artifact.rev - 1} 次`}>
+            r{artifact.rev}
+          </span>
+        )}
         <button className="icon-btn" onClick={remove} title="从画布移除">
           ✕
         </button>
@@ -61,47 +61,20 @@ interface BodyProps {
   emit: (e: CanvasEvent) => void;
 }
 
+/**
+ * 按 kind 分派到对应的渲染器。
+ *
+ * 这里没有 switch,也没有 default —— 直接查注册表。所以**不可能漏掉某个 kind**:
+ * 「注册表要覆盖所有 kind」这件事由 kinds/registry.ts 的编译期断言保证,
+ * 而不是靠在这个文件里记得加一个 case。新增 kind 时这个文件一行都不用动。
+ */
 function ArtifactBody({ artifact, emit }: BodyProps) {
-  const { spec } = artifact;
-  // 滑块运行时值不属于 spec,单独从 store 取 —— 见 docs/artifact-schema.md §1
-  // useShallow 是必须的:选择器每次都会构造新对象,zustand v5 默认按 Object.is 比较,
-  // 不加浅比较会无限重渲染。
-  const scope = useSession(
-    useShallow((s) =>
-      spec.kind === 'plot2d' ? { ...defaultsOf(artifact), ...s.runtime[artifact.id] } : EMPTY,
-    ),
-  );
-  const setParam = useSession((s) => s.setParam);
-
-  switch (spec.kind) {
-    case 'plot2d':
-      return (
-        <Plot2D
-          spec={spec}
-          scope={scope}
-          artifactId={artifact.id}
-          rev={artifact.rev}
-          emit={emit}
-          onParam={(name, value) => setParam(artifact.id, name, value)}
-        />
-      );
-    case 'derivation':
-      return <Derivation spec={spec} artifactId={artifact.id} emit={emit} />;
-    case 'quiz':
-      return <Quiz spec={spec} artifactId={artifact.id} emit={emit} />;
-    case 'html':
-      return <HtmlBlock spec={spec} artifactId={artifact.id} emit={emit} />;
-    default:
-      // 不认识的新 kind:不能崩,也不能静默丢掉 —— 学生存的推导不能因为一次前端升级就消失
-      return <div className="unknown-kind">这个内容需要更新版本才能显示。</div>;
+  const mod = kindModule(artifact.spec.kind);
+  if (!mod) {
+    // 只有一种情况会走到这里:本地存着"未来版本的前端"创建的 artifact。
+    // 不能崩,也不能静默丢弃 —— 学生三个月前存的推导不能因为一次降级就消失。
+    return <div className="unknown-kind">这个内容需要更新版本才能显示。</div>;
   }
-}
-
-const EMPTY: Record<string, number> = {};
-
-function defaultsOf(a: CanvasArtifact): Record<string, number> {
-  if (a.spec.kind !== 'plot2d') return EMPTY;
-  const out: Record<string, number> = {};
-  for (const p of a.spec.params ?? []) out[p.name] = p.value;
-  return out;
+  const { Body } = mod;
+  return <Body spec={artifact.spec} artifactId={artifact.id} rev={artifact.rev} emit={emit} />;
 }

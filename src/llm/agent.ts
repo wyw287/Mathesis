@@ -9,8 +9,8 @@
 import { useSession, type ApiMessage } from '../store/session';
 import type { CanvasArtifact, CanvasEvent } from '../types/artifact';
 import { TOOLS, toOpenAiTools, toolByName, toolsAsText, type ToolContext } from '../tools';
-import { parseSpec, titleFor } from '../tools/specs';
-import { ToolInputError } from '../tools/validate';
+import { parseSpec, titleFor } from '../kinds/registry';
+import { ToolInputError } from '../lib/validate';
 import { LlmError, ToolUnsupportedError, chat, type ToolCall } from './client';
 import { FALLBACK_INSTRUCTION, extractArtifactBlocks, stripArtifactBlocks } from './fallback';
 import { SYSTEM_PROMPT } from './prompt';
@@ -107,7 +107,9 @@ function runTool(tc: ToolCall): ToolRunResult {
     for (const c of out.created ?? []) {
       ids.push(useSession.getState().addArtifact(c.spec, c.title, 'ai'));
     }
-    if (out.patched) useSession.getState().patchArtifact(out.patched.id, out.patched.patch);
+    if (out.patched) {
+      useSession.getState().patchArtifact(out.patched.id, out.patched.patch, out.patched.title);
+    }
     return { content: out.message, artifactIds: ids };
   } catch (e) {
     // 校验失败是模型的输入错误,不是系统故障 —— 原样回给它,让它自己修

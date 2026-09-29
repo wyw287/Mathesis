@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { formatTick, niceStep, safeEval, sampleExplicit, sampleParametric } from '../lib/math';
-import type { CanvasEvent, Curve, Plot2DSpec } from '../types/artifact';
+import { formatTick, niceStep, safeEval, sampleExplicit, sampleParametric } from '../../lib/math';
+import type { CanvasEvent, Curve, Plot2DSpec } from '../../types/artifact';
 import { colorAt } from './palette';
 
 const HEIGHT = 420;

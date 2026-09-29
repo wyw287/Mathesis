@@ -7,11 +7,10 @@
  *
  * 运行:npm run check
  */
-import { parseSpec, titleFor } from '../src/tools/specs';
+import { parseSpec, titleFor, reconcileArtifacts } from '../src/kinds/registry';
 import { extractArtifactBlocks, stripArtifactBlocks } from '../src/llm/fallback';
-import { ToolInputError } from '../src/tools/validate';
+import { ToolInputError } from '../src/lib/validate';
 import { CURRENT_SCHEMA_VERSION, type CanvasArtifact } from '../src/types/artifact';
-import { refreshArtifact } from '../src/store/session';
 
 let pass = 0;
 let fail = 0;
@@ -216,11 +215,11 @@ ok('旧的原始 LaTeX 标题在载入时被拍平', () => {
     updatedAt: 0,
     refs: [],
   };
-  const fresh = refreshArtifact(stale);
+  const [fresh] = reconcileArtifacts([stale]);
   if (fresh.title.includes('\\')) throw new Error(`旧标题没被重算：${fresh.title}`);
   if (!fresh.title.includes('不存在')) throw new Error(`重算结果丢了内容：${fresh.title}`);
 });
-ok('标题已经正确时不改动对象', () => {
+ok('标题已经正确时不新建对象、也不新建数组', () => {
   const a: CanvasArtifact = {
     id: 'x2',
     spec: { kind: 'quiz', question: '这个极限存在吗?' },
@@ -232,7 +231,11 @@ ok('标题已经正确时不改动对象', () => {
     updatedAt: 0,
     refs: [],
   };
-  if (refreshArtifact(a) !== a) throw new Error('无谓地新建了对象,会让 React 多渲染一轮');
+  const input = [a];
+  if (reconcileArtifacts(input) !== input) {
+    throw new Error('无谓地新建了数组,App 挂载时会白白触发一次重渲染');
+  }
+  if (reconcileArtifacts(input)[0] !== a) throw new Error('无谓地新建了 artifact 对象');
 });
 
 console.log('\n降级路径:从文本里抠 spec');

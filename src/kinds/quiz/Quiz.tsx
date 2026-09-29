@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import type { CanvasEvent, QuizSpec } from '../types/artifact';
-import { Markdown } from './Markdown';
+import type { CanvasEvent, QuizSpec } from '../../types/artifact';
+import { Markdown } from '../../renderers/Markdown';
 
 interface Props {
   spec: QuizSpec;
