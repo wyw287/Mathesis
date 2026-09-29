@@ -347,7 +347,9 @@ async function runLoop(opts: LoopOptions): Promise<void> {
       tool_calls: outcome.toolCalls.map((tc) => ({
         id: tc.id,
         type: 'function',
-        function: { name: tc.name, arguments: tc.argsRaw || '{}' },
+        // safeArguments 而不是 tc.argsRaw:坏 JSON 会让中转丢掉整个 tool_use,
+        // 报错却指向"tool_result 缺少对应的 tool_use"。理由见该函数的注释。
+        function: { name: tc.name, arguments: safeArguments(tc.argsRaw) },
       })),
     });
 
@@ -478,6 +480,30 @@ function reportError(e: unknown): void {
 /** 系统提示词(按模式拼) */
 export function buildSystemPrompt(toolsMode: boolean): string {
   return toolsMode ? SYSTEM_PROMPT : `${SYSTEM_PROMPT}\n${FALLBACK_INSTRUCTION}\n\n## 可用 spec 说明\n\n${toolsAsText()}`;
+}
+
+/**
+ * 发给 API 的工具调用参数必须是**合法 JSON**,哪怕内容完全不对。
+ *
+ * 起因是一条实测的 500:模型在写第二个工具调用时被长度上限截断,`arguments`
+ * 是个没闭合的 JSON 字符串。中转在翻译时要把它**解析成结构化输入**来构造
+ * 自己的 tool_use 块,解析失败就把那一块整个丢了 —— 于是我们随后发过去的
+ * tool_result 找不到对应调用,报错说"tool_result 缺少对应的 tool_use",
+ * **指向完全错误的方向**(看起来像我们漏传了调用)。
+ *
+ * 换成 `{}` 之后,中转能正常翻译;而**我们自己仍然拿原始字符串去解析**,
+ * 所以模型收到的还是"参数不是合法 JSON,请重新调用"那条有信息量的错误 ——
+ * 那本来就是设计好要回给它的。
+ */
+function safeArguments(raw: string): string {
+  const s = (raw ?? '').trim();
+  if (!s) return '{}';
+  try {
+    JSON.parse(s);
+    return s;
+  } catch {
+    return '{}';
+  }
 }
 
 /**

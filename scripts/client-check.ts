@@ -623,6 +623,69 @@ console.log('\nbaseUrl 归一化');
   ok('各种形态的 baseUrl 都拼对', allOk);
 }
 
+console.log('\n工具调用 id 与请求序列');
+
+{
+  // 有些中转会给同一轮的多个调用发同一个 id。我们这边看不出来,
+  // 但翻译成 Anthropic 格式时两个同 id 的 tool_use 会被直接拒绝,
+  // 而且报错会说"tool_result 找不到对应的 tool_use",指向完全错误的方向。
+  const s = await serve((_req, res) => {
+    sse(res);
+    res.write(frame({ tool_calls: [{ index: 0, id: 'dup', function: { name: 'plot2d', arguments: '{}' } }] }));
+    res.write(frame({ tool_calls: [{ index: 1, id: 'dup', function: { name: 'derive', arguments: '{}' } }] }));
+    res.write('data: [DONE]\n\n');
+    res.end();
+  });
+  const out = await call(s.url, SAMPLE_TOOLS);
+  const ids = out.toolCalls.map((t) => t.id);
+  ok('重复的工具调用 id 被重编号', ids.length === 2 && ids[0] !== ids[1], JSON.stringify(ids));
+  ok('重编号保留原 id 可读性', ids[0] === 'dup' && ids[1].startsWith('dup'), JSON.stringify(ids));
+  s.close();
+}
+
+{
+  // 缺 id 的调用也要补上,而且不能互相撞
+  const s = await serve((_req, res) => {
+    sse(res);
+    res.write(frame({ tool_calls: [{ index: 0, function: { name: 'plot2d', arguments: '{}' } }] }));
+    res.write(frame({ tool_calls: [{ index: 1, function: { name: 'derive', arguments: '{}' } }] }));
+    res.write('data: [DONE]\n\n');
+    res.end();
+  });
+  const out = await call(s.url, SAMPLE_TOOLS);
+  const ids = out.toolCalls.map((t) => t.id);
+  ok('缺 id 时补上且互不相同', ids.every(Boolean) && new Set(ids).size === ids.length, JSON.stringify(ids));
+  s.close();
+}
+
+{
+  // 形状类 500:光说"请求形状有问题"没用,得把真正的请求序列摆出来 ——
+  // 否则只能反复猜"是不是漏传了 tool_use"、"是不是 id 对不上"
+  const s = await serve((_req, res) => {
+    res.writeHead(500, { 'Content-Type': 'application/json' });
+    res.end('{"error":{"message":"unexpected tool_use_id found in tool_result blocks"}}');
+  });
+  const e = await callExpectingError(s.url, SAMPLE_TOOLS, {
+    messages: [
+      { role: 'system', content: '很长很长的系统提示' },
+      { role: 'user', content: '帮我画个图' },
+      {
+        role: 'assistant',
+        content: '',
+        reasoning_content: '想了一下',
+        tool_calls: [{ id: 'a', type: 'function', function: { name: 'plot2d', arguments: '{}' } }],
+      },
+      { role: 'tool', tool_call_id: 'a', content: '已绘制' },
+    ],
+  });
+  ok('诊断里带出请求的消息序列', /我们发出去的消息序列/.test(e.message), e.message.slice(0, 160));
+  ok('序列标出 tool_calls 和它的 id', /tool_calls=\[plot2d@a\]/.test(e.message), e.message.slice(0, 400));
+  ok('序列标出工具结果的对应 id', /tool_call_id=a/.test(e.message), '');
+  ok('空的 content 被显式标出(它是可疑点之一)', /content=""/.test(e.message), '');
+  ok('思维链只报字数,不糊满屏幕', /reasoning=4字/.test(e.message), '');
+  s.close();
+}
+
 console.log(`\n${pass} 通过, ${fail} 失败\n`);
 // 显式退出:假服务器可能还留着句柄,不能让它们把进程吊住
 process.exit(fail ? 1 : 0);

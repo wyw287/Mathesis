@@ -308,6 +308,49 @@ async function main() {
     s.close();
   }
 
+  console.log('\n工具参数写坏时,发给 API 的仍必须是合法 JSON');
+
+  {
+    // 实测到的 500:模型写第二个工具调用时被长度上限截断,arguments 是没闭合的 JSON。
+    // 中转要把它解析成结构化输入来构造 tool_use,解析失败就把那一块整个丢了 ——
+    // 于是我们的 tool_result 悬空,报错说"tool_result 缺少对应的 tool_use",
+    // 指向完全错误的方向(看起来像我们漏传了调用)。
+    const s = await serve([
+      {
+        content: '',
+        finish: 'tool_calls',
+        toolCalls: [
+          { index: 0, id: 'c1', function: { name: 'plot2d', arguments: '{"view":{"x":[0,1]' } },
+        ],
+      },
+      { content: '我重试一下。', finish: 'stop' },
+    ]);
+    await reset(s.url);
+    await send({ text: '画个图' });
+
+    // 假服务器已经把 body 解析过了
+    const second = s.requests[1] as any;
+    const assistant = second.messages[second.messages.length - 2];
+    const toolMsg = second.messages[second.messages.length - 1];
+
+    const sentArgs = assistant?.tool_calls?.[0]?.function?.arguments;
+    ok('发给 API 的 arguments 是合法 JSON', (() => {
+      try {
+        JSON.parse(sentArgs);
+        return true;
+      } catch {
+        return false;
+      }
+    })(), String(sentArgs));
+
+    ok('tool_call_id 仍然对得上,没有悬空', toolMsg?.tool_call_id === assistant?.tool_calls?.[0]?.id, String(toolMsg?.tool_call_id));
+
+    // 关键:我们自己仍然按**原始字符串**解析,所以模型拿到的还是有信息量的那条错误。
+    // 如果这里也用了替换后的 {},模型只会看到"缺 view"之类,不知道是自己 JSON 写坏了。
+    ok('模型仍被告知是 JSON 写坏了,而不是字段缺失', /不是合法 JSON/.test(toolMsg?.content ?? ''), String(toolMsg?.content).slice(0, 60));
+    s.close();
+  }
+
   console.log(`\n${pass} 通过, ${fail} 失败\n`);
 
 }

@@ -170,8 +170,47 @@ function looksLikeToolUnsupported(status: number, body: string): boolean {
   return TOOLISH.test(body) && NEGATIVE.test(body);
 }
 
+/**
+ * 把请求的消息序列压成几行。
+ *
+ * 形状类报错时**这是唯一能定位的证据**。错误信息说"需要看原始报文",但指的是
+ * 响应体;而被怀疑的恰恰是**请求**。没有这个,就只能反复猜"是不是漏传了
+ * tool_use"、"是不是 id 对不上"。
+ *
+ * 只摘结构,不摘正文 —— 要判断的是形状,不是内容。
+ */
+export function describeMessages(messages: unknown[]): string {
+  return messages
+    .map((raw, i) => {
+      const m = (raw ?? {}) as Record<string, any>;
+      const bits: string[] = [];
+      const content = m.content;
+      if (typeof content === 'string') {
+        bits.push(content ? `content="${content.slice(0, 30)}…"` : `content=""(空)`);
+      } else if (Array.isArray(content)) {
+        bits.push(`content=[${content.length} 块]`);
+      }
+      if (Array.isArray(m.tool_calls)) {
+        bits.push(
+          `tool_calls=[${m.tool_calls.map((t: any) => `${t?.function?.name}@${t?.id ?? '无id'}`).join(', ')}]`,
+        );
+      }
+      if (m.tool_call_id) bits.push(`tool_call_id=${m.tool_call_id}`);
+      if (typeof m.reasoning_content === 'string' && m.reasoning_content) {
+        bits.push(`reasoning=${m.reasoning_content.length}字`);
+      }
+      return `  [${i}] ${m.role ?? '?'} ${bits.join(' ')}`;
+    })
+    .join('\n');
+}
+
 /** 把 HTTP 状态码翻译成用户能照着做的动作。 */
-function explainStatus(status: number, endpoint: string, body: string): string {
+function explainStatus(
+  status: number,
+  endpoint: string,
+  body: string,
+  messages: unknown[] = [],
+): string {
   const tail = body ? `\n\n接口返回：${body.slice(0, 400)}` : '';
 
   // 有些 5xx 其实是**我们的请求形状不合规**,对方只是用服务器错误的壳把话带回来。
@@ -183,8 +222,9 @@ function explainStatus(status: number, endpoint: string, body: string): string {
       '注意:虽然状态码是服务器错误,但这段话描述的是**我们发出去的请求形状有问题** —— ' +
       '重试不会改变结果。\n' +
       '报错里用的是服务商内部协议的术语(各家对工具调用的叫法不同),' +
-      '说明它在把 OpenAI 格式翻译成自己的格式时对不上号。\n' +
-      '这既是中转的限制,也可能是客户端的 bug;两者都需要看原始报文才能判断。' +
+      '说明它在把 OpenAI 格式翻译成自己的格式时对不上号。\n\n' +
+      `我们发出去的消息序列(共 ${messages.length} 条)：\n` +
+      (messages.length ? describeMessages(messages) : '  (未提供)') +
       tail
     );
   }
@@ -298,7 +338,7 @@ export async function chat(opts: ChatOptions): Promise<ChatOutcome> {
     if (opts.tools?.length && looksLikeToolUnsupported(res.status, body)) {
       throw new ToolUnsupportedError(body);
     }
-    throw new LlmError(explainStatus(res.status, endpoint, body), res.status, body);
+    throw new LlmError(explainStatus(res.status, endpoint, body, opts.messages), res.status, body);
   }
 
   opts.onPhase?.('已连接,等待模型输出');
@@ -618,7 +658,27 @@ async function fromStreaming(
     .sort((a, b) => a[0] - b[0])
     .map(([, v]) => v)
     .filter((tc) => tc.name);
-  for (const tc of toolCalls) if (!tc.id) tc.id = `call_${Math.random().toString(36).slice(2)}`;
+
+  /**
+   * 保证每个工具调用有**唯一**的 id。
+   *
+   * 有些中转会给同一轮的多个调用发同一个 id(或者干脆不发)。这在我们这边看不出来,
+   * 但翻译成 Anthropic 格式时,两个同 id 的 `tool_use` 会被直接拒绝 ——
+   * 而且报错说的是"tool_result 找不到对应的 tool_use",指向完全错误的方向。
+   *
+   * 重编号是安全的:assistant 的 tool_calls 和随后的 tool 结果用的是同一个值。
+   */
+  const usedIds = new Set<string>();
+  for (const [index, tc] of toolCalls.entries()) {
+    let id = tc.id || `call_${index}`;
+    if (usedIds.has(id)) {
+      let n = 1;
+      while (usedIds.has(`${id}_${n}`)) n++;
+      id = `${id}_${n}`;
+    }
+    tc.id = id;
+    usedIds.add(id);
+  }
 
   // 累积到了工具调用但函数名始终没来 —— 这是接口兼容性问题,值得单独说清楚
   if (!toolCalls.length && acc.size > 0) {
