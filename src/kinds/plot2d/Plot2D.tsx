@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ParamSliders } from '../../renderers/ParamSliders';
 import { marchingSquares, sampleVectorField, toZeroForm, type Arrow, type Segment } from '../../lib/field';
 import { formatTick, niceStep, safeEval, sampleExplicit, sampleParametric } from '../../lib/math';
 import type { CanvasEvent, Curve, Plot2DSpec } from '../../types/artifact';
@@ -353,27 +354,12 @@ export function Plot2D({ spec, scope, artifactId, clipKey, rev, onParam, emit }:
         )}
       </div>
 
-      {(spec.params ?? []).length > 0 && (
-        <div className="params">
-          {spec.params!.map((p) => (
-            <label key={p.name} className="param">
-              <span className="param-name">{p.label ?? p.name}</span>
-              <input
-                type="range"
-                min={p.min}
-                max={p.max}
-                step={p.step ?? (p.max - p.min) / 100}
-                value={scope[p.name] ?? p.value}
-                onChange={(e) => onParam(p.name, Number(e.target.value))}
-                // 拖动过程只改本地渲染;松手才发事件给模型
-                onPointerUp={() => emit({ type: 'paramChange', artifactId, param: p.name, value: scope[p.name] ?? p.value })}
-                onKeyUp={() => emit({ type: 'paramChange', artifactId, param: p.name, value: scope[p.name] ?? p.value })}
-              />
-              <span className="param-value">{(scope[p.name] ?? p.value).toFixed(2)}</span>
-            </label>
-          ))}
-        </div>
-      )}
+      <ParamSliders
+        params={spec.params ?? []}
+        scope={scope}
+        onChange={onParam}
+        onCommit={(name, value) => emit({ type: 'paramChange', artifactId, param: name, value })}
+      />
     </div>
   );
 }

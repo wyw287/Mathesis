@@ -1476,3 +1476,19 @@ button {
 .cmp-cell .derivation {
   padding: 12px 14px 14px;
 }
+
+/* ------------------------------------------------------------ 3D 曲面 */
+
+.plot3d {
+  padding: 10px 8px 4px;
+}
+
+.plot3d-canvas {
+  display: block;
+  touch-action: none;
+  cursor: grab;
+}
+
+.plot3d-canvas:active {
+  cursor: grabbing;
+}

@@ -109,6 +109,8 @@ function describeEvent(e: CanvasEvent): string {
       return `在「${titleOf(e.artifactId)}」作答：${e.response.choice ?? e.response.text ?? ''}`;
     case 'viewport':
       return `缩放了「${titleOf(e.artifactId)}」的视野到 x∈[${round2(e.view.x[0])}, ${round2(e.view.x[1])}]`;
+    case 'orbit':
+      return `转动了「${titleOf(e.artifactId)}」的视角`;
     case 'remove':
       // 用事件自带的 title,不能走 titleOf —— 事件被读到时 artifact 已经不在了
       return `删掉了「${e.title}」`;

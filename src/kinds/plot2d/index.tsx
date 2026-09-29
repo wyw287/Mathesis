@@ -140,7 +140,8 @@ function parseCurve(v: unknown, where: string): Curve {
   }
 }
 
-function parseParam(v: unknown, where: string): ParamSpec {
+/** 导出给 plot3d 复用 —— 参数滑块的校验规则两边必须一致。 */
+export function parseParam(v: unknown, where: string): ParamSpec {
   const o = obj(v, where);
   const min = num(o.min, `${where}.min`);
   const max = num(o.max, `${where}.max`);

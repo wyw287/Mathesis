@@ -209,6 +209,41 @@ interface CompareSpec {
 `compare → registry → compare` 的环。枚举本身也是好事:"什么适合并排看"
 本来就有答案。
 
+### 3.6 plot3d
+
+三维曲面,**可以拖着转**。
+
+```ts
+type Surface3D =
+  | { type: 'height';     expr: string; over: { x: [number, number]; y: [number, number] } }
+  | { type: 'parametric'; x: string; y: string; z: string;
+      over: { u: [number, number]; v: [number, number] } };
+
+interface Plot3DSpec {
+  kind: 'plot3d';
+  surface: Surface3D;
+  params?: ParamSpec[];     // 和 plot2d 同一套
+  view?: { yaw?: number; pitch?: number };  // 初始朝向,单位度
+  resolution?: number;      // 网格密度,默认 44
+  wireframe?: boolean;      // 默认开 —— 曲面的拓扑靠它才读得出来
+}
+```
+
+只做这两种。**隐式曲面 F(x,y,z)=0 刻意不做** —— 那需要 marching cubes
+(256 种情形、约 15 种歧义,而且经典情形表是已知有洞的)。与其做一个会撕出洞
+的版本,不如不做,并在工具描述里写清楚,免得模型用别的参数硬凑出形状错误的图。
+
+**渲染是手写 canvas,不引 three.js。** 两个理由:项目到现在只有四个依赖;
+以及**这一层能测** —— 投影点的位置、旋转基的正交性、自动装框后所有点是否落在
+视口内,都是能写断言的,而 WebGL 在无头环境里一行都验证不了。
+
+代价是 painter's algorithm,没有深度缓冲,自相遮挡的曲面可能有伪影。对函数图像
+和参数曲面按面片平均深度排序在实践中够用。
+
+配色按高度:跨过零点时用**发散配色**(负蓝正红),因为马鞍面、极值这类图形
+最需要一眼看出零点的位置;不跨零点时用顺序配色 —— 对 `z = x² + y²` 用发散
+配色会暗示一个并不存在的零点。
+
 ---
 
 ## 4. 表达力分层:Tier 1 与 Tier 2
@@ -372,7 +407,10 @@ interface ToolResult<S> {
 「数值采样是独立课题」—— 确实如此,但课题本身不长:marching squares 加逐点箭头,
 一百多行,单独成 `lib/field.ts` 就够了。
 
-**不做:** `html`(Tier 2)、3D、Pyodide/SymPy、动画、状态建模、Manim、Lean。
+**3D 只做了一部分:** 高度图和参数曲面做了(§3.6),隐式曲面和三維向量场没做
+—— 前者需要 marching cubes,是独立课题。
+
+**不做:** `html`(Tier 2)、Pyodide/SymPy、动画、状态建模、Manim、Lean。
 
 SymPy 推迟不是因为它不重要,而是因为**符号计算在第二阶段才能发挥价值**——
 它真正的用途是"验证模型给的这一步推导对不对",那需要先有推导渲染器和

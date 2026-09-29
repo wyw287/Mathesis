@@ -191,13 +191,56 @@ export interface CounterexampleSpec {
   found?: string;
 }
 
+// ---------------------------------------------------------------- 3D
+
+/**
+ * 三维曲面。
+ *
+ * 只做这两种 —— 它们和 2D 的网格采样是同一件事再加一维,模型的表达难度也一样。
+ *
+ * **隐式曲面 F(x,y,z)=0 不在这里**,那需要 marching cubes(256 种情形、约 15 种
+ * 歧义,而且经典情形表是已知有洞的),是独立课题,不该和"加个 3D"混在一起。
+ */
+export type Surface3D =
+  | {
+      /** 高度图 z = f(x, y) —— 最常用的一种 */
+      type: 'height';
+      expr: string;
+      over: { x: [number, number]; y: [number, number] };
+      label?: string;
+    }
+  | {
+      /** 参数曲面 (u, v) → (x, y, z)。球面、环面、旋转体都靠它。 */
+      type: 'parametric';
+      x: string;
+      y: string;
+      z: string;
+      over: { u: [number, number]; v: [number, number] };
+      label?: string;
+    };
+
+export interface Plot3DSpec {
+  kind: 'plot3d';
+  surface: Surface3D;
+  /** 可拖动参数。表达式(高度图的 expr、参数曲面的 x/y/z)可以引用这些名字。 */
+  params?: ParamSpec[];
+  /** 相机的初始朝向,单位是度。省略则用默认的斜视角。 */
+  view?: { yaw?: number; pitch?: number };
+  /** 每边的网格密度,默认 44。调太高拖拽会卡。 */
+  resolution?: number;
+  /** 画网格线,默认开 —— 曲面的拓扑靠它才读得出来 */
+  wireframe?: boolean;
+  note?: string;
+}
+
 export type ArtifactSpec =
   | Plot2DSpec
   | DerivationSpec
   | QuizSpec
   | HtmlSpec
   | CounterexampleSpec
-  | CompareSpec;
+  | CompareSpec
+  | Plot3DSpec;
 export type ArtifactKind = ArtifactSpec['kind'];
 
 // ---------------------------------------------------------------- 并排对比
@@ -273,6 +316,13 @@ export type CanvasEvent =
   | { type: 'stepExpand'; artifactId: string; stepId: string }
   | { type: 'answer'; artifactId: string; response: { choice?: string; text?: string } }
   | { type: 'viewport'; artifactId: string; view: { x: [number, number]; y: [number, number] } }
+  /**
+   * 学生转动了 3D 曲面的视角。
+   *
+   * 不带角度数据:相机位置对模型没有意义,它只需要知道"学生转着看了"。
+   * 转一个曲面是个相当刻意的动作(比点一下卡片重得多),所以这个信号值得记下来。
+   */
+  | { type: 'orbit'; artifactId: string }
   /**
    * 学生把这张卡片删掉了。
    *

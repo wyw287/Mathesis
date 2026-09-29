@@ -94,7 +94,7 @@ rejects('表达式语法错误', {
   view: { x: [0, 1] },
   curves: [{ type: 'explicit', expr: 'sin(' }],
 }, '表达式');
-rejects('未知 kind', { kind: 'plot3d', view: {}, curves: [] }, 'kind');
+rejects('未知 kind', { kind: 'plot4d', view: {}, curves: [] }, 'kind');
 
 console.log('\nderivation');
 ok('合法推导 + gap 标注', () => {
@@ -422,6 +422,66 @@ rejects('格子缺 label', {
   ...CMP_SPEC,
   items: [CMP_SPEC.items[0], { spec: CMP_SPEC.items[1].spec }],
 }, 'label');
+
+console.log('\n三维曲面 —— 解析');
+
+const S3_HEIGHT = {
+  kind: 'plot3d',
+  surface: { type: 'height', expr: 'x^2 - y^2', over: { x: [-2, 2], y: [-2, 2] } },
+};
+
+ok('高度图能解析', () => {
+  const s = parseSpec(S3_HEIGHT);
+  if (s.kind !== 'plot3d') throw new Error('kind 错了');
+  if (s.surface.type !== 'height') throw new Error('surface 类型错了');
+  if (s.surface.over.x[1] !== 2) throw new Error('范围丢了');
+});
+ok('参数曲面能解析', () => {
+  const s = parseSpec({
+    kind: 'plot3d',
+    surface: {
+      type: 'parametric',
+      x: 'R*cos(u)*sin(v)',
+      y: 'R*sin(u)*sin(v)',
+      z: 'R*cos(v)',
+      over: { u: [0, 6.2832], v: [0, 3.1416] },
+    },
+    params: [{ name: 'R', value: 1, min: 0.5, max: 3 }],
+  });
+  if (s.kind !== 'plot3d' || s.surface.type !== 'parametric') throw new Error('没解析成参数曲面');
+  if (s.params?.[0].name !== 'R') throw new Error('参数丢了');
+});
+ok('分辨率和参数都夹在合理区间', () => {
+  const lo = parseSpec({ ...S3_HEIGHT, resolution: 2 });
+  const hi = parseSpec({ ...S3_HEIGHT, resolution: 9999 });
+  if (lo.kind !== 'plot3d' || hi.kind !== 'plot3d') throw new Error('kind 错了');
+  if (lo.resolution !== 8) throw new Error(`下界没夹住:${lo.resolution}`);
+  if (hi.resolution !== 90) throw new Error(`上界没夹住:${hi.resolution}`);
+});
+ok('标题优先用 label', () => {
+  const s = parseSpec({ ...S3_HEIGHT, surface: { ...S3_HEIGHT.surface, label: '马鞍面' } });
+  if (titleFor(s) !== '马鞍面') throw new Error(`得到 ${titleFor(s)}`);
+});
+ok('没有 label 时用表达式做标题', () => {
+  const t = titleFor(parseSpec(S3_HEIGHT));
+  if (!t.includes('x^2 - y^2')) throw new Error(`得到 ${t}`);
+});
+rejects('未知的曲面类型', {
+  ...S3_HEIGHT,
+  surface: { type: 'implicit', expr: 'x^2+y^2+z^2-1', over: { x: [-1, 1], y: [-1, 1] } },
+}, 'type');
+rejects('高度图缺 over.x', {
+  ...S3_HEIGHT,
+  surface: { type: 'height', expr: 'x', over: { y: [-1, 1] } },
+}, 'over.x');
+rejects('参数曲面缺 z 分量', {
+  kind: 'plot3d',
+  surface: { type: 'parametric', x: 'u', y: 'v', over: { u: [0, 1], v: [0, 1] } },
+}, 'z');
+rejects('表达式里写赋值', {
+  ...S3_HEIGHT,
+  surface: { type: 'height', expr: 'f(x) = x^2', over: { x: [-1, 1], y: [-1, 1] } },
+}, '表达式');
 
 console.log(`\n${pass} 通过, ${fail} 失败\n`);
 if (fail) process.exit(1);
