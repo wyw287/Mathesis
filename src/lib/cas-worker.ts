@@ -27,6 +27,18 @@ export interface CasRequest {
 
 export type CasResponse = { id: number; verdict: Verdict } | { id: number; error: string };
 
+/**
+ * 先报到,再干活。
+ *
+ * 客户端据此判断"worker 到底起没起来"。没有这一步的话,代码块加载失败时
+ * 请求会石沉大海,而调用方只能靠**每一步都等满超时**才发现 —— 六步推导就是
+ * 三十秒的干等,那不是安全降级,那是另一种卡法。
+ *
+ * 这里能立刻报到,是因为 nerdamer 藏在 `verifyStep` 的动态 import 后面,
+ * 这个文件的顶层只有下面这几行。
+ */
+self.postMessage({ ready: true });
+
 self.onmessage = (e: MessageEvent<CasRequest>) => {
   const { id, req } = e.data ?? {};
   if (typeof id !== 'number' || !req) return;

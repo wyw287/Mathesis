@@ -7,42 +7,80 @@
 import type { VerifyRequest, Verdict } from './cas';
 import type { CasRequest, CasResponse } from './cas-worker';
 
+/**
+ * 等 worker 报到的时限。
+ *
+ * 它的顶层只挂了一个消息处理函数(nerdamer 藏在 `verifyStep` 的动态 import 后面),
+ * 所以正常情况下是毫秒级。等这么久还没动静,基本可以断定是那个代码块没加载成功
+ * (最常见的原因是部署到了子路径、worker 的相对路径不对)。
+ */
+const READY_TIMEOUT_MS = 3000;
+
 let worker: Worker | null = null;
 let seq = 0;
-/** 一旦确定环境里没有 Worker(比如 node),就不再重试。 */
-let supported: boolean | null = null;
 
-function ensureWorker(): Worker | null {
-  if (supported === false) return null;
-  if (typeof Worker === 'undefined') {
-    supported = false;
-    return null;
-  }
-  if (!worker) {
+/**
+ * `unknown` → 还没试过;`ready` → 能用;`unsupported` → 别再用它了。
+ *
+ * **这个状态必须记住。** 记不住的话,worker 坏掉之后**每一步都要白等一次超时**
+ * —— 六步推导就是三十秒的干等。那不是安全降级,那是另一种卡法。
+ */
+let state: 'unknown' | 'ready' | 'unsupported' = 'unknown';
+let booting: Promise<boolean> | null = null;
+
+function boot(): Promise<boolean> {
+  if (state !== 'unknown') return Promise.resolve(state === 'ready');
+  if (booting) return booting;
+
+  booting = new Promise<boolean>((resolve) => {
+    let w: Worker;
     try {
-      worker = new Worker(new URL('./cas-worker.ts', import.meta.url), { type: 'module' });
-      supported = true;
-    } catch {
-      supported = false;
-      return null;
+      w = new Worker(new URL('./cas-worker.ts', import.meta.url), { type: 'module' });
+    } catch (e) {
+      console.warn('[mathesis] 核对 worker 起不来,退回主线程', e);
+      state = 'unsupported';
+      resolve(false);
+      return;
     }
-  }
-  return worker;
+
+    const timer = setTimeout(() => {
+      console.warn(
+        `[mathesis] 核对 worker ${READY_TIMEOUT_MS}ms 内没有报到,之后退回主线程。` +
+          '多半是它的代码块没加载成功(检查一下部署路径)。',
+      );
+      w.terminate();
+      state = 'unsupported';
+      resolve(false);
+    }, READY_TIMEOUT_MS);
+
+    const onReady = (e: MessageEvent<{ ready?: boolean }>) => {
+      if (!e.data?.ready) return;
+      w.removeEventListener('message', onReady);
+      clearTimeout(timer);
+      worker = w;
+      state = 'ready';
+      resolve(true);
+    };
+    w.addEventListener('message', onReady);
+  });
+
+  return booting;
 }
 
 /**
- * 跑一次核对。**超时返回 null** —— 调用方据此降级。
+ * 跑一次核对。**超时或不可用返回 null** —— 调用方据此降级。
  *
  * 超时的处理是唯一值得说的地方:同步计算没法中断,所以只能
  * `terminate()` 把整个 worker 丢掉,下次调用会起一个新的。
  * 那意味着 worker 里已经加载好的 CAS 也没了(下次要重新加载,几百毫秒),
  * 但比起让主线程冻死,这是划算的。
  */
-export function runInWorker(req: VerifyRequest, timeoutMs: number): Promise<Verdict | null> {
-  const w = ensureWorker();
-  if (!w) return Promise.resolve(null);
-  const id = ++seq;
+export async function runInWorker(req: VerifyRequest, timeoutMs: number): Promise<Verdict | null> {
+  if (!(await boot())) return null;
+  const w = worker;
+  if (!w) return null;
 
+  const id = ++seq;
   return new Promise<Verdict | null>((resolve) => {
     let settled = false;
     const finish = (v: Verdict | null) => {
@@ -59,8 +97,11 @@ export function runInWorker(req: VerifyRequest, timeoutMs: number): Promise<Verd
     };
 
     const timer = setTimeout(() => {
+      // 这一条超时是**真的算太久**(不是 worker 坏了),所以下次还用它
       w.terminate();
       worker = null;
+      state = 'unknown';
+      booting = null;
       finish(null);
     }, timeoutMs);
 
