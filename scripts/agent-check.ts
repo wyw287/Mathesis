@@ -12,6 +12,7 @@ import type { AddressInfo } from 'node:net';
 import { useSession } from '../src/store/session';
 import { ensureSystemMessage, send } from '../src/llm/agent';
 import { putImage } from '../src/lib/blob-store';
+import { CURRENT_SCHEMA_VERSION } from '../src/types/artifact';
 import { installIndexedDB } from './fake-idb';
 
 const PIXELS = 'data:image/png;base64,iVBORw0KGgo=';
@@ -500,6 +501,56 @@ async function main() {
     const raw = idb.data.get('mathesis.session') ?? '';
     ok('send 结束时就落盘了,不用等合并窗口', raw.includes('落盘测试'), raw ? '(落了,但里面没有那句话)' : '(压根没落盘)');
     idb.uninstall();
+    s.close();
+  }
+
+  console.log('\n滑块的当前值 —— 模型不能只看到"拖过几次"');
+
+  {
+    // 修之前模型手上有两个数字,都对不上屏幕:目录里只有"拖过 N 次"这个计数,
+    // 而 read_artifact 返回的 spec 里 params[].value 是**默认值**。
+    // 学生拖过之后它照着一个和屏幕不同的数作答,还很自信。
+    const s = await serve([
+      {
+        content: '',
+        finish: 'tool_calls',
+        toolCalls: [
+          { index: 0, id: 'c1', function: { name: 'read_artifact', arguments: JSON.stringify({ id: 'A' }) } },
+        ],
+      },
+      { content: '现在 a 是 2.5。', finish: 'stop' },
+    ]);
+    await reset(s.url);
+
+    // 固定 id 直接放一张图,顺便把滑块从默认的 1 拖到 2.5
+    useSession.setState({
+      artifacts: [
+        {
+          id: 'A',
+          rev: 1,
+          schemaVersion: CURRENT_SCHEMA_VERSION,
+          origin: 'ai',
+          title: 'y = a·x',
+          createdAt: 0,
+          updatedAt: 0,
+          spec: {
+            kind: 'plot2d',
+            view: { x: [0, 1] },
+            curves: [{ type: 'explicit', expr: 'a*x' }],
+            params: [{ name: 'a', value: 1, min: 0, max: 5 }],
+          },
+        },
+      ],
+      runtime: { A: { a: 2.5 } },
+    });
+
+    await send({ text: '现在 a 是多少?' });
+
+    const toolMsg = (useSession.getState().apiHistory as any[]).find((m) => m?.role === 'tool');
+    const payload = JSON.parse(String(toolMsg?.content ?? '{}'));
+    ok('read_artifact 的返回里带着 runtime', payload.runtime?.a === 2.5, JSON.stringify(payload.runtime));
+    // 两个数都要在:模型得能分清"默认值"和"学生拖到了哪儿"
+    ok('spec 里的默认值也原样保留', payload.spec?.params?.[0]?.value === 1, JSON.stringify(payload.spec?.params));
     s.close();
   }
 

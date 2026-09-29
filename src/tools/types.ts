@@ -11,6 +11,18 @@ export interface ToolContext {
   artifacts: ArtifactIndexEntry[];
   focus?: string;
   readArtifact: (id: string) => CanvasArtifact | undefined;
+  /**
+   * 这张图上的滑块**现在**停在哪儿。没拖过的参数不在里面。
+   *
+   * 和 spec 里 `params[].value` 不是一回事:那个是**默认值**,学生一拖就不再是
+   * 屏幕上显示的数了。在此之前模型完全看不到这个值 —— 目录里只有"拖过 12 次"
+   * 这个计数,而 `read_artifact` 给的是默认值,于是它会照着一个和屏幕不同的数字
+   * 自信地作答。
+   *
+   * 只挂在按需调用的 `read_artifact` 上,不塞进每轮都发的目录 ——
+   * 那样上下文会随学生拖滑块的次数一直长。
+   */
+  runtime: (id: string) => Record<string, number>;
 }
 
 export interface ToolOutcome {

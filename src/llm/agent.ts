@@ -204,6 +204,7 @@ function runTool(tc: ToolCall): ToolRunResult {
     artifacts: useSession.getState().artifactIndex(),
     focus: useSession.getState().focusId,
     readArtifact: (id) => useSession.getState().getArtifact(id),
+    runtime: (id) => useSession.getState().runtime[id] ?? {},
   };
 
   try {

@@ -18,7 +18,13 @@ export const readArtifact: TeachingTool = {
   name: 'read_artifact',
   description:
     '读取画布上某个 artifact 的完整内容。画布目录里只有 id、类型和标题,' +
-    '需要看具体内容(比如学生问"刚才那个图的定义域是什么")时才调用。',
+    '需要看具体内容(比如学生问"刚才那个图的定义域是什么")时才调用。\n\n' +
+    '返回 `{ spec, runtime }` 两部分:\n' +
+    '· `spec` 是这张图的定义。注意滑块参数里的 `value` 是**默认值**。\n' +
+    '· `runtime` 是学生**现在**把滑块拖到的位置。没拖过的参数不会出现在里面。\n\n' +
+    '**回答"现在 a 是多少"这类问题必须用 runtime,不能用 spec 里的 value** ——' +
+    '学生拖过滑块之后,屏幕上显示的就不是默认值了。目录里那句"拖过 N 次参数"' +
+    '只说明他动过,不说明动到了哪儿。',
   parameters: {
     type: 'object',
     properties: { id: { type: 'string', description: 'artifact id' } },
@@ -30,7 +36,9 @@ export const readArtifact: TeachingTool = {
     if (!art) {
       throw new ToolInputError(`画布上没有 id 为 "${id}" 的内容。当前画布目录:\n${indexText(ctx)}`);
     }
-    return { message: JSON.stringify(art.spec) };
+    // 形状固定成 { spec, runtime },即使 runtime 是空的 —— 模型不该去应付
+    // "有时候是 spec 本身、有时候是包了一层的对象"这种两副面孔。
+    return { message: JSON.stringify({ spec: art.spec, runtime: ctx.runtime(id) }) };
   },
 };
 
