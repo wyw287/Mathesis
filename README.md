@@ -158,4 +158,4 @@ docs/artifact-schema.md    ← 契约在这里。改行为之前先读它
 
 ## 许可
 
-尚未选择。打算开源的话建议补一个(比如 MIT)。
+MIT,见 [LICENSE](LICENSE)。
