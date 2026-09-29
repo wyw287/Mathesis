@@ -21,14 +21,16 @@ export function Markdown({ source }: { source: string }) {
 /**
  * 给「本来应该是公式」的字段用(命题、前提)。
  *
- * 模型给这些字段写什么都有可能:纯 LaTeX、被 $ 包起来的 LaTeX、
- * 中文说明里夹着公式。这里按内容猜一次,而不是指望模型每次都听话。
+ * 规则刻意简单到没有猜测空间:只有一种情况需要按混排处理 ——
+ * 模型把公式用 $ 包起来夹在说明文字里。其余一律当公式渲染。
+ *
+ * 这里曾经用「含中文就是说明文字」来判断,是错的:中文数学写作里
+ * `\text{不存在}` 这类写法极其常见,那个猜测会把最正常的输入判成正文,
+ * 结果整个命题以原始 LaTeX 显示出来。而 KaTeX 本身对中文和 \text{}
+ * 都能正常处理,根本不需要猜。
  */
 export function MathBlock({ tex }: { tex: string }) {
-  if (tex.includes('$')) return <Markdown source={tex} />;
-  // 出现中文基本可以断定是说明文字而不是公式
-  if (/[一-鿿]/.test(tex)) return <Markdown source={tex} />;
-  return <Latex tex={tex} display />;
+  return tex.includes('$') ? <Markdown source={tex} /> : <Latex tex={tex} display />;
 }
 
 // ------------------------------------------------------------------ 行内

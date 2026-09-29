@@ -9,7 +9,7 @@
  * 运行:npm run check:render
  */
 import { renderToStaticMarkup } from 'react-dom/server';
-import { Markdown } from '../src/renderers/Markdown';
+import { Markdown, MathBlock } from '../src/renderers/Markdown';
 import { unwrap } from '../src/renderers/Latex';
 
 let pass = 0;
@@ -86,6 +86,31 @@ console.log('\n恶意输出 —— BYOK 下模型输出是不可信输入');
   const h = md(String.raw`$\href{javascript:alert(1)}{x}$`);
   // KaTeX 的 trust:false 会砍掉 \href 的 URL,只留文本
   ok('KaTeX 的 \\href 受 trust:false 限制', !h.includes('javascript:'), h);
+}
+
+console.log('\n命题 / 前提的渲染路由 —— 第二次报的 bug 在这里');
+// 注:Latex 的实际 DOM 注入在 useEffect 里,SSR 不执行,所以这里断言的是
+// 「路由到公式渲染且 KaTeX 解析成功」—— 后者由 latex-fallback 是否出现来判定
+// (useMemo 在 SSR 里是会跑的)。
+const rendered = (tex: string) => renderToStaticMarkup(MathBlock({ tex }));
+
+for (const [name, input] of [
+  ['含 \\text{中文} 的命题', String.raw`\lim_{x\to 0}\sin\frac{1}{x}\ \text{不存在}`],
+  ['中英混排的 given', String.raw`f(x)=\sin(1/x)\ \text{在}\ x=0\ \text{的去心邻域上有定义}`],
+  ['带集合符号的 given', String.raw`\mathbb{R}\setminus\{0\}`],
+  ['纯中文说明', '证明 sin(1/x) 在 0 处没有极限'],
+] as [string, string][]) {
+  const h = rendered(input);
+  ok(`${name} 走公式渲染且解析成功`, h.includes('latex-display') && !h.includes('latex-fallback'), h);
+}
+
+{
+  const h = rendered('设 $f$ 在 $x_0$ 处连续');
+  ok('夹着 $ 的说明文字走混排渲染', h.includes('latex-inline') && !h.includes('latex-fallback'), h);
+}
+{
+  const h = rendered(String.raw`$\lim_{x\to 0}\sin\frac{1}{x}$`);
+  ok('整体被 $ 包住时也不会退化成原始文本', !h.includes('latex-fallback') && !h.includes('\\lim'), h);
 }
 
 console.log('\n不崩');
