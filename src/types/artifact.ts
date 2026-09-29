@@ -119,7 +119,6 @@ export interface CanvasArtifact<S extends ArtifactSpec = ArtifactSpec> {
   title: string;
   createdAt: number;
   updatedAt: number;
-  refs: string[];
 }
 
 /** 进上下文的最小单元。 */
@@ -142,7 +141,18 @@ export type CanvasEvent =
   | { type: 'stepConfused'; artifactId: string; stepId: string }
   | { type: 'stepExpand'; artifactId: string; stepId: string }
   | { type: 'answer'; artifactId: string; response: { choice?: string; text?: string } }
-  | { type: 'viewport'; artifactId: string; view: { x: [number, number]; y: [number, number] } };
+  | { type: 'viewport'; artifactId: string; view: { x: [number, number]; y: [number, number] } }
+  /**
+   * 学生把这张卡片删掉了。
+   *
+   * 带上 title 是因为别的字段都能事后去 store 查,这个查不到了 ——
+   * 事件真正被读到时,artifact 已经不在画布上了。
+   *
+   * 有这个事件之前,删除是唯一一条**对模型完全不可见**的变更:创建和修改都走
+   * 工具调用(模型看得到工具结果),而删除走 UI 按钮直接改 store。
+   * 后果是模型下一轮只看到目录里少了一项,分不清"被删了"和"从没存在过"。
+   */
+  | { type: 'remove'; artifactId: string; title: string };
 
 /**
  * 只有 stepConfused 必须立刻触发模型调用 —— 它是学生的求救信号。

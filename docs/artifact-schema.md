@@ -41,7 +41,6 @@ interface CanvasArtifact<S extends ArtifactSpec = ArtifactSpec> {
   title: string;           // 人可读,用于对话引用("上一张图")
   createdAt: number;
   updatedAt: number;
-  refs: string[];          // 依赖的 artifact id
 }
 ```
 
@@ -187,8 +186,16 @@ type CanvasEvent =
   | { type: 'stepConfused'; artifactId: string; stepId: string }
   | { type: 'stepExpand';   artifactId: string; stepId: string }
   | { type: 'answer';       artifactId: string; response: { choice?: string; text?: string } }
-  | { type: 'viewport';     artifactId: string; view: { x: [number, number]; y: [number, number] } };
+  | { type: 'viewport';     artifactId: string; view: { x: [number, number]; y: [number, number] } }
+  | { type: 'remove';       artifactId: string; title: string };
 ```
+
+`remove` 带 `title` 是个例外:别的字段都能事后回 store 查,这个查不到 ——
+事件真正被读到时 artifact 已经不在了。
+
+它是补一个结构性不对称。创建和修改都走工具调用,模型能在工具结果里看到;
+而删除走 UI 按钮直接改 store,曾经是**唯一一条对模型完全不可见的变更**。
+后果是模型下一轮只看到目录里少了一项,分不清"被删了"和"从没存在过"。
 
 两条规则:
 
@@ -227,13 +234,26 @@ const MIGRATIONS: Record<number, Migration> = {
 
 **永远不进上下文的东西:** 完整 spec、渲染层状态、滑块当前值、用户拖动历史。
 
-**每轮进上下文的:** 一个 artifact 目录,每项一行:
+**每轮进上下文的:** 一个 artifact 目录,每项一行,后面可以带一段**交互标注**:
 
 ```
-[a1] plot2d   sin(1/x) 在 0 附近的行为
-[a2] derivation  ε-δ 定义的等价性
+[a1] plot2d   sin(1/x) 在 0 附近的行为  · 拖过 12 次参数
+[a2] derivation  ε-δ 定义的等价性  步骤5 [s1:technical s4:substantive]  · s4 标记不懂
 [a3] quiz    极限存在性判断
 ```
+
+交互标注是模型**唯一能"看到学习者"的地方**。只有目录能让它知道学生拖过几次滑块、
+标记过哪一步不懂、哪张测验还没做 —— 没有这些,"主动引导"就只能被动响应文字,
+诊断、脚手架、节奏控制、主动出题全都无从谈起。
+
+只在真有过交互时才标注。没标注的含义是"没做过交互操作",**不等于"没看过"** ——
+这个区别写进了系统提示词,免得模型把扫一眼当成没兴趣。
+
+刻意只记录**已经发生的事实**(拖过几次、点开过哪一步),不推断掌握度:
+掌握度是需要验证的模型,而"这一步被点开过三次"是个能直接用的事实。
+
+⚠️ 目录无上限增长。五十张卡片时,`ls` 本身就占掉每轮不少 token。
+真到那一步需要分组或分页,不是加字段能解决的。
 
 **按需取用:** 模型需要看具体内容时,调用 `readArtifact(id)`。
 要修改已有的图时,调用 `editArtifact(id, patch)`,而不是重新生成一张。

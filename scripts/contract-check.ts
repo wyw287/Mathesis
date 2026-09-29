@@ -213,7 +213,6 @@ ok('旧的原始 LaTeX 标题在载入时被拍平', () => {
     title: String.raw`推导：\lim_{x\to 0}\sin\frac{1}{x}\ \text{不存`,
     createdAt: 0,
     updatedAt: 0,
-    refs: [],
   };
   const [fresh] = reconcileArtifacts([stale]);
   if (fresh.title.includes('\\')) throw new Error(`旧标题没被重算：${fresh.title}`);
@@ -229,7 +228,6 @@ ok('标题已经正确时不新建对象、也不新建数组', () => {
     title: '测验：这个极限存在吗?',
     createdAt: 0,
     updatedAt: 0,
-    refs: [],
   };
   const input = [a];
   if (reconcileArtifacts(input) !== input) {

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import type { Settings as SettingsShape } from '../store/session';
 import { useSession } from '../store/session';
 
 interface Props {
@@ -42,6 +43,7 @@ export function Settings({ onClose }: Props) {
         baseUrl: draft.baseUrl.trim(),
         apiKey: draft.apiKey.trim(),
         model: draft.model.trim(),
+        maxTokens: draft.maxTokens,
       });
       setProbe(
         r.ok
@@ -105,6 +107,54 @@ export function Settings({ onClose }: Props) {
             placeholder="deepseek-chat"
             spellCheck={false}
           />
+        </label>
+
+        <label className="field">
+          <span>思考强度 (reasoning_effort)</span>
+          <select
+            value={draft.reasoningEffort ?? ''}
+            onChange={(e) =>
+              setDraft({ ...draft, reasoningEffort: (e.target.value || null) as SettingsShape['reasoningEffort'] })
+            }
+          >
+            <option value="">不发送（用服务商默认值）</option>
+            <option value="low">low — 少想一点</option>
+            <option value="high">high — 默认档</option>
+            <option value="max">max — 尽力</option>
+          </select>
+          <small>
+            只对推理模型有效。DeepSeek 的思考模式<strong>默认就是 high</strong>,
+            所以留空等于 high。
+            <br />
+            如果遇到「思考很久然后被截断、正文一个字都没有」,调到 <code>low</code>{' '}
+            往往比调大输出上限更有效——问题不是空间不够,是想得太久。
+            <br />
+            各家取值不一样（OpenAI 还有 none / minimal / xhigh),所以这里只给通用的三档。
+          </small>
+        </label>
+
+        <label className="field">
+          <span>输出上限 (max_tokens)</span>
+          <input
+            type="number"
+            min={0}
+            step={1024}
+            value={draft.maxTokens ?? ''}
+            onChange={(e) => {
+              const v = e.target.value.trim();
+              setDraft({ ...draft, maxTokens: v === '' ? null : Math.max(0, Number(v)) });
+            }}
+            placeholder="留空 = 用服务商默认值"
+          />
+          <small>
+            <strong>建议留空。</strong>留空就不发送这个字段,由服务商用自己的默认值。
+            <br />
+            注意一个反直觉的机制:很多服务商的推理模型让<strong>思维链和正文共享</strong>
+            这一份预算,而思维链动辄写掉几万 token。所以<strong>填一个偏小的值比不填更糟</strong>
+            ——它会把思考一起掐断,表现为回复一片空白。
+            <br />
+            只有出现"回答说到一半被截断"时才需要填,常见值 32768 / 65536。
+          </small>
         </label>
 
         <label className="field row">

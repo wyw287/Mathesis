@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useSession } from '../store/session';
+import { useSession, type ChatMessage } from '../store/session';
 import { Markdown } from '../renderers/Markdown';
 
 const OPENERS = [
@@ -46,11 +46,13 @@ export function Chat() {
         )}
         {messages.map((m) => (
           <div key={m.id} className={`msg msg-${m.role}`}>
+            {m.reasoning && <ReasoningBlock message={m} busy={busy} />}
             {m.role === 'notice' ? (
               // 错误信息是我自己拼的,里面有排版用的换行和缩进 —— 按纯文本原样显示,
               // 不走 Markdown,免得内容里的符号被当成标记吃掉
               m.content
-            ) : m.role === 'assistant' && m.content === '' && busy ? (
+            ) : m.role === 'assistant' && m.content === '' && busy && !m.reasoning ? (
+              // 已经有思维链时不再显示光标点 —— 上面的折叠块已经在证明它在动了
               <span className="typing">
                 <i />
                 <i />
@@ -112,9 +114,41 @@ function StatusLine() {
     <div className="status-line">
       <span className="spinner" />
       <span>{status.phase}</span>
+      {status.reasoningChars ? (
+        <span className="status-chars">已 {status.reasoningChars.toLocaleString()} 字</span>
+      ) : null}
       <span className="status-time">{secs}s</span>
       {secs >= 20 && <span className="hint">若一直停在这里，点「停止」再试</span>}
     </div>
+  );
+}
+
+/**
+ * 思维链折叠块。
+ *
+ * 默认收起不是客气 —— 一万多字的思考过程展开会把对话流完全淹没,而学生要的是
+ * 画布和结论。但它也不该被丢掉:对数学教学来说,"老师是怎么想到这一步的"
+ * 本身就是内容。
+ */
+function ReasoningBlock({ message, busy }: { message: ChatMessage; busy: boolean }) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  const hasContent = !!message.content;
+
+  useEffect(() => {
+    // 没有正文时,思维链就是这次唯一的产出。此时自动展开 ——
+    // 否则学生看到的是一个错误提示加一个折着的块,什么都读不到。
+    // 只在结束时动手一次,之后用户自己折起来不会被覆盖。
+    if (ref.current && !busy && !hasContent) ref.current.open = true;
+  }, [busy, hasContent]);
+
+  return (
+    <details className="reasoning" ref={ref}>
+      <summary>
+        思维过程 · {message.reasoning!.length.toLocaleString()} 字
+        {busy && !hasContent && <span className="reasoning-live"> · 思考中…</span>}
+      </summary>
+      <div className="reasoning-body">{message.reasoning}</div>
+    </details>
   );
 }
 

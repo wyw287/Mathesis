@@ -30,7 +30,13 @@ export function ArtifactCard({ artifact, focused }: Props) {
   }, []);
 
   const setFocus = () => useSession.getState().setFocus(artifact.id);
-  const remove = () => useSession.getState().removeArtifact(artifact.id);
+  const remove = () => {
+    // 先发事件再删。删除是唯一一条不走工具调用的画布变更 —— 创建和修改模型都
+    // 能在工具结果里看到,删除如果也不告诉它,它下一轮只看到目录里少了一项,
+    // 分不清"被删了"和"从没存在过"。
+    emit({ type: 'remove', artifactId: artifact.id, title: artifact.title });
+    useSession.getState().removeArtifact(artifact.id);
+  };
 
   return (
     <section className={focused ? 'artifact focused' : 'artifact'} onMouseDown={setFocus}>

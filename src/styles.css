@@ -222,6 +222,65 @@ button {
   color: var(--faint);
 }
 
+.status-chars {
+  font-family: var(--mono);
+  color: var(--faint);
+}
+
+/* ------------------------------------------------------------ 思维链 */
+
+.reasoning {
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fbfaf8;
+  overflow: hidden;
+}
+
+.reasoning > summary {
+  cursor: pointer;
+  padding: 5px 10px;
+  font-size: 12.5px;
+  color: var(--muted);
+  list-style: none;
+  user-select: none;
+}
+
+.reasoning > summary::-webkit-details-marker {
+  display: none;
+}
+
+.reasoning > summary::before {
+  content: '▸ ';
+  color: var(--faint);
+}
+
+.reasoning[open] > summary::before {
+  content: '▾ ';
+}
+
+.reasoning > summary:hover {
+  color: var(--text);
+  background: #f6f4f0;
+}
+
+.reasoning-live {
+  color: var(--accent);
+}
+
+.reasoning-body {
+  padding: 4px 12px 10px;
+  border-top: 1px solid var(--border);
+  max-height: 340px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--muted);
+  /* 思维链是模型的原始输出,没有任何结构保证 —— 原样保留换行 */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .probe {
   margin: 14px 0 0;
   padding: 10px 12px;
@@ -849,6 +908,7 @@ button {
 
 .field input[type='text'],
 .field input[type='password'],
+.field input[type='number'],
 .field input:not([type]) {
   width: 100%;
   padding: 8px 11px;
@@ -1035,4 +1095,21 @@ button {
 /* 列表项的 Markdown 段落不要撑开行高 */
 .quiz-choice .md-head {
   margin: 0;
+}
+
+.field select {
+  width: 100%;
+  padding: 8px 11px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.field select:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: var(--panel);
 }

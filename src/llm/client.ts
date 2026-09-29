@@ -17,9 +17,59 @@ export class LlmError extends Error {
     message: string,
     readonly status?: number,
     readonly body?: string,
+    /**
+     * 机器可读的错误类别。
+     *
+     * 给 agent 循环判断"这个失败值不值得重试"用的。靠 message 匹配太脆 ——
+     * 文案会改,而重试策略不该跟着文案一起坏。
+     */
+    readonly code?: 'empty_response' | 'bad_request_shape',
   ) {
     super(message);
     this.name = 'LlmError';
+  }
+}
+
+/**
+ * 发出去之前先检查消息序列的形状。
+ *
+ * 起因是一条实测到的 HTTP 500:
+ *
+ *   unexpected `tool_use_id` found in `tool_result` blocks: call_xx.
+ *   Each `tool_result` block must have a corresponding `tool_use` block
+ *   in the previous message.
+ *
+ * 两个陷阱叠在一起:报错措辞是**对方内部协议的术语**(`tool_use` / `tool_result`
+ * 是 Anthropic 的叫法,不是 OpenAI 的),而外壳是 500 —— 于是诊断会把人引向
+ * "服务商抖动,稍后重试",而真实原因是**我们的历史里有一条工具结果找不到
+ * 对应的工具调用**,重试多少次都一样。
+ *
+ * 自己先查一遍,能把"对方的错"和"我们的错"当场分开。
+ */
+function assertMessageShape(messages: unknown[]): void {
+  for (let i = 0; i < messages.length; i++) {
+    const m = messages[i] as any;
+    if (m?.role !== 'tool') continue;
+
+    // 往前找最近的一条非 tool 消息。不能只看 i-1 —— 一次回复里调用两个工具时,
+    // 合法的序列是 assistant(tool_calls:[a,b]) → tool(a) → tool(b),
+    // 第二个工具结果的前一条就是 tool。只查相邻会把正常情况判成错误。
+    let j = i - 1;
+    while (j >= 0 && (messages[j] as any)?.role === 'tool') j--;
+    const prev = messages[j] as any;
+
+    const ids = new Set<string>((prev?.tool_calls ?? []).map((tc: any) => tc?.id));
+    if (prev?.role !== 'assistant' || !ids.has(m.tool_call_id)) {
+      throw new LlmError(
+        `请求形状有误:第 ${i} 条是工具结果(tool_call_id=${m.tool_call_id}),` +
+          `但它前面找不到包含这个调用的 assistant 消息。\n\n` +
+          `这是客户端的问题,不是服务商的问题 —— 重试没有用。\n` +
+          `完整历史:${messages.map((x: any) => x?.role).join(' → ')}`,
+        undefined,
+        undefined,
+        'bad_request_shape',
+      );
+    }
   }
 }
 
@@ -36,6 +86,14 @@ export interface ToolCall {
   argsRaw: string;
 }
 
+/** 服务商报的 token 用量。比字数精确得多 —— 字数只能估,这个能直接对账。 */
+export interface TokenUsage {
+  prompt?: number;
+  completion?: number;
+  reasoning?: number;
+  total?: number;
+}
+
 export interface ChatDiag {
   endpoint: string;
   status: number | null;
@@ -43,6 +101,21 @@ export interface ChatDiag {
   sseEvents: number;
   bytes: number;
   elapsedMs: number;
+  /** 前几条原始 data 行。判断"是不是 OpenAI 兼容格式"时,这是唯一的实证。 */
+  sample: string[];
+  /** 所有 delta 里出现过的字段名。取到空内容时,先看这里缺了什么。 */
+  fields: string[];
+  /** 思维链字段的字符数。R1 类模型会把整个预算烧在这里,正文一个字都不剩。 */
+  reasoningChars: number;
+  /**
+   * 实际发出去的参数。
+   *
+   * 有了它才能回答"我在设置里改了,到底生效没有" —— 尤其是中转可能
+   * **静默丢弃**它不认识的参数(DeepSeek 对不认识的参数就是静默忽略)。
+   * 没有这一项,改了没效果时完全无从判断是设置没生效还是参数无效。
+   */
+  sent: Record<string, unknown>;
+  usage: TokenUsage | null;
 }
 
 export interface ChatOutcome {
@@ -58,8 +131,14 @@ export interface ChatOptions {
   model: string;
   messages: unknown[];
   tools?: unknown[];
+  /** 输出上限。null / 省略 = 不发送该字段,由服务商决定默认值。 */
+  maxTokens?: number | null;
+  /** 思考强度。null / 省略 = 不发送,由服务商决定(DeepSeek 默认 high)。 */
+  reasoningEffort?: string | null;
   signal?: AbortSignal;
   onText?: (delta: string) => void;
+  /** 推理模型的思维链增量。和正文分开走,不混进 onText。 */
+  onReasoning?: (delta: string) => void;
   onPhase?: (phase: string) => void;
 }
 
@@ -94,6 +173,22 @@ function looksLikeToolUnsupported(status: number, body: string): boolean {
 /** 把 HTTP 状态码翻译成用户能照着做的动作。 */
 function explainStatus(status: number, endpoint: string, body: string): string {
   const tail = body ? `\n\n接口返回：${body.slice(0, 400)}` : '';
+
+  // 有些 5xx 其实是**我们的请求形状不合规**,对方只是用服务器错误的壳把话带回来。
+  // 报错措辞还常常是对方内部协议的术语(不同协议对工具调用的叫法不一样),
+  // 照着字面理解会以为是服务商抖动,然后一直重试 —— 那是错的。
+  if (status >= 500 && /tool_use|tool_result|tool_call/i.test(body)) {
+    return (
+      `请求格式被服务端拒绝（HTTP ${status}）。\n\n` +
+      '注意:虽然状态码是服务器错误,但这段话描述的是**我们发出去的请求形状有问题** —— ' +
+      '重试不会改变结果。\n' +
+      '报错里用的是服务商内部协议的术语(各家对工具调用的叫法不同),' +
+      '说明它在把 OpenAI 格式翻译成自己的格式时对不上号。\n' +
+      '这既是中转的限制,也可能是客户端的 bug;两者都需要看原始报文才能判断。' +
+      tail
+    );
+  }
+
   switch (status) {
     case 401:
     case 403:
@@ -127,6 +222,9 @@ export async function chat(opts: ChatOptions): Promise<ChatOutcome> {
   const started = Date.now();
   const endpoint = resolveEndpoint(opts.baseUrl);
 
+  // 形状不对就别发出去了 —— 对面只会用 500 和一个别人的术语把问题带回来。
+  assertMessageShape(opts.messages);
+
   const diag: ChatDiag = {
     endpoint,
     status: null,
@@ -134,13 +232,38 @@ export async function chat(opts: ChatOptions): Promise<ChatOutcome> {
     sseEvents: 0,
     bytes: 0,
     elapsedMs: 0,
+    sample: [],
+    fields: [],
+    reasoningChars: 0,
+    sent: {},
+    usage: null,
   };
 
   const payload: Record<string, unknown> = { model: opts.model, messages: opts.messages, stream: true };
   if (opts.tools && opts.tools.length) {
+    // 刻意不发 tool_choice。'auto' 本来就是默认值,发了没有任何收益,
+    // 但 DeepSeek 思考模式 + 工具调用时会因为它返回 400(见其思考模式文档)。
     payload.tools = opts.tools;
-    payload.tool_choice = 'auto';
   }
+  // 只有明确给了正数才发送。留空就完全不提这个字段,
+  // 让服务商用自己的默认值 —— 发一个它不接受的值会被直接 400 拒绝。
+  if (typeof opts.maxTokens === 'number' && opts.maxTokens > 0) {
+    payload.max_tokens = opts.maxTokens;
+  }
+  // 同上,只有明确指定才发送。各家取值集合不一样,发错会被拒。
+  if (opts.reasoningEffort) {
+    payload.reasoning_effort = opts.reasoningEffort;
+  }
+
+  // 记录实际发出去的东西。"设置改了没效果"是这个产品最容易卡住的一类问题,
+  // 而它只有两种成因:设置没走到这里,或者中转把它吃了。这一项能区分两者。
+  diag.sent = {
+    model: opts.model,
+    stream: true,
+    tools: opts.tools?.length ?? 0,
+    ...(payload.max_tokens !== undefined ? { max_tokens: payload.max_tokens } : {}),
+    ...(payload.reasoning_effort !== undefined ? { reasoning_effort: payload.reasoning_effort } : {}),
+  };
 
   opts.onPhase?.(`正在请求 ${hostOf(endpoint)}`);
 
@@ -191,20 +314,25 @@ export async function chat(opts: ChatOptions): Promise<ChatOutcome> {
     }
     outcome = { ...fromNonStreaming(json), diag };
   } else {
-    const { content, toolCalls, finishReason, sseEvents, bytes, truncated } = await fromStreaming(
-      res,
-      opts.onText,
-      opts.signal,
-    );
-    diag.sseEvents = sseEvents;
-    diag.bytes = bytes;
-    outcome = { content, toolCalls, finishReason, diag };
+    const stream = await fromStreaming(res, opts.onText, opts.signal, opts.onReasoning);
+    diag.sseEvents = stream.sseEvents;
+    diag.bytes = stream.bytes;
+    diag.sample = stream.sample;
+    diag.fields = stream.fields;
+    diag.reasoningChars = stream.reasoningChars;
+    diag.usage = stream.usage;
+    outcome = {
+      content: stream.content,
+      toolCalls: stream.toolCalls,
+      finishReason: stream.finishReason,
+      diag,
+    };
 
-    if (truncated) {
+    if (stream.truncated) {
       throw new LlmError(
         `${STALL_MS / 1000} 秒内没有收到任何新数据,已中断。\n\n` +
-          `期间收到 ${sseEvents} 个数据事件、${bytes} 字节。\n` +
-          (sseEvents === 0
+          `期间收到 ${stream.sseEvents} 个数据事件、${stream.bytes} 字节。\n` +
+          (stream.sseEvents === 0
             ? '一个事件都没收到,说明请求发出去了但对面没有开始回应 —— 可能是模型名写错、' +
               '余额不足,或者这个中转不真正支持流式（试着在设置里关掉后重试）。'
             : '收到了一部分就停了,可能是服务商超时。'),
@@ -217,24 +345,67 @@ export async function chat(opts: ChatOptions): Promise<ChatOutcome> {
   diag.elapsedMs = Date.now() - started;
 
   if (!outcome.content && !outcome.toolCalls.length) {
-    throw new LlmError(explainEmpty(outcome));
+    throw new LlmError(explainEmpty(outcome), undefined, undefined, 'empty_response');
   }
 
   return outcome;
 }
 
+function usageLine(u: TokenUsage | null, reasoningChars: number): string {
+  if (!u || (u.completion === undefined && u.reasoning === undefined)) return '· 服务商未返回用量\n';
+  const parts: string[] = [];
+  if (u.prompt !== undefined) parts.push(`输入 ${u.prompt}`);
+  if (u.completion !== undefined) parts.push(`输出 ${u.completion}`);
+  // 有些中转不报 reasoning_tokens,永远是 0。而此时我们已经数出了几万字的思维链 ——
+  // 显示 "思维链 0" 会和上面那行直接打架,让人怀疑哪一项是错的。宁可不显示。
+  if (u.reasoning !== undefined && !(u.reasoning === 0 && reasoningChars > 0)) {
+    parts.push(`其中思维链 ${u.reasoning}`);
+  }
+  return `· 实际用量：${parts.join('，')}\n`;
+}
+
 function explainEmpty(o: ChatOutcome): string {
   const d = o.diag;
-  return (
+  const head =
     '模型返回了空响应（既没有文字也没有工具调用）。\n\n' +
     `· 接口：${d.endpoint}\n` +
     `· HTTP ${d.status}，Content-Type: ${d.contentType || '(空)'}\n` +
+    `· 实际发送：${JSON.stringify(d.sent)}\n` +
     `· 收到 ${d.sseEvents} 个数据事件、${d.bytes} 字节\n` +
-    `· finish_reason: ${o.finishReason ?? '(无)'}\n\n` +
-    (d.sseEvents === 0
-      ? '一个数据事件都没有 —— 接口返回了 200,但 body 是空的或不认识的格式。'
-      : '有数据事件但没解析出内容 —— 可能是这个接口的响应格式不是 OpenAI 兼容的。')
-  );
+    `· delta 里出现过的字段：${d.fields.length ? d.fields.join(', ') : '(一个都没有)'}\n` +
+    `· 思维链长度：${d.reasoningChars} 字符\n` +
+    usageLine(d.usage, d.reasoningChars) +
+    `· finish_reason: ${o.finishReason ?? '(无)'}\n\n`;
+
+  // 最容易被误判成"接口坏了"的一种:推理模型把预算全烧在思维链上。
+  // 接口其实是好的,是预算和思考强度的问题 —— 诊断必须说清楚,否则会让人去查错方向。
+  if (d.reasoningChars > 0) {
+    const effort = d.sent.reasoning_effort;
+    return (
+      head +
+      `接口本身是通的 —— 模型确实在输出,只是全花在思维链上了(${d.reasoningChars} 字),\n` +
+      '还没开始写正文/调工具就用完了预算。\n\n' +
+      (effort
+        ? `你已经设了 reasoning_effort=${effort} 并成功发出去。如果字数没有明显下降,\n` +
+          '说明中转没有把它转发给模型(DeepSeek 对不认识的参数是静默忽略,不报错)。\n\n'
+        : '注意上面「实际发送」里没有 reasoning_effort —— 去设置里选一个再试。\n\n') +
+      '可以试的方向：\n' +
+      '· 换一个**窄**的问题。宽泛的"详细解释一下 X"会让它长篇规划;\n' +
+      '  "画个 y = sin(1/x) 看看 x→0" 这种一次工具调用就能完成,思考量小得多。\n' +
+      '· 设置里把思考强度调到 low。\n' +
+      '· 把输出上限留空(不发送),让服务商用它的默认值。'
+    );
+  }
+  if (d.sseEvents === 0) {
+    return head + '一个数据事件都没有 —— 接口返回了 200,但 body 是空的或不认识的格式。';
+  }
+  if (!d.fields.length) {
+    return head + '事件里没有 choices[0].delta 字段 —— 响应格式不是 OpenAI 兼容的。';
+  }
+  if (d.fields.includes('content')) {
+    return head + 'delta 里有 content 字段,但收到的全是空字符串 —— 中转很可能没有真正转发模型的输出。';
+  }
+  return head + `事件里有 delta,但没有 content 字段。原始报文样本：\n\n${d.sample.join('\n')}`;
 }
 
 const hostOf = (url: string) => {
@@ -269,12 +440,29 @@ interface StreamResult {
   bytes: number;
   /** 因为长时间收不到数据而被中断 */
   truncated: boolean;
+  sample: string[];
+  fields: string[];
+  reasoningChars: number;
+  usage: TokenUsage | null;
+}
+
+/** 各家的 usage 字段名不完全一致,能取到多少取多少。 */
+function extractUsage(u: any): TokenUsage {
+  if (!u || typeof u !== 'object') return {};
+  const details = u.completion_tokens_details ?? u.output_tokens_details ?? {};
+  return {
+    prompt: u.prompt_tokens ?? u.input_tokens,
+    completion: u.completion_tokens ?? u.output_tokens,
+    reasoning: details.reasoning_tokens ?? u.reasoning_tokens,
+    total: u.total_tokens,
+  };
 }
 
 async function fromStreaming(
   res: Response,
   onText?: (d: string) => void,
   signal?: AbortSignal,
+  onReasoning?: (d: string) => void,
 ): Promise<StreamResult> {
   const reader = res.body?.getReader();
   if (!reader) {
@@ -289,6 +477,15 @@ async function fromStreaming(
   let bytes = 0;
   let sawDone = false;
   let truncated = false;
+  // 思维链单独累计,不混进正文 —— 但要计数,因为"烧光预算在思考上"是一种
+  // 真实且会表现为"模型什么都没说"的失败
+  let reasoningChars = 0;
+  /** delta 里出现过的字段名。取到空内容时,这是第一个该看的地方。 */
+  const fields = new Set<string>();
+  /** 前几条原始 data 行,用来实证"是不是 OpenAI 兼容格式" */
+  const sample: string[] = [];
+  /** 服务商报的用量。通常在最后一个 chunk 里,也可能一直都没有。 */
+  let usage: TokenUsage | null = null;
   // tool_calls 的参数是跨 chunk 分片传的,必须按 index 累积再整体 JSON.parse
   const acc = new Map<number, ToolCall>();
 
@@ -312,6 +509,8 @@ async function fromStreaming(
       return; // 半截 JSON / 非 SSE 噪声
     }
     sseEvents++;
+    if (sample.length < 4) sample.push(data.length > 500 ? `${data.slice(0, 500)}…` : data);
+    if (json.usage) usage = extractUsage(json.usage);
     if (json.error) throw new LlmError(json.error.message ?? '上游返回错误', undefined, data);
 
     const choice = json.choices?.[0];
@@ -323,6 +522,16 @@ async function fromStreaming(
       if (typeof m.content === 'string' && m.content) {
         content += m.content;
         onText?.(m.content);
+      }
+      const reasoning =
+        typeof m.reasoning_content === 'string'
+          ? m.reasoning_content
+          : typeof m.reasoning === 'string'
+            ? m.reasoning
+            : '';
+      if (reasoning) {
+        reasoningChars += reasoning.length;
+        onReasoning?.(reasoning);
       }
       for (const tc of m.tool_calls ?? []) {
         acc.set(acc.size, {
@@ -336,9 +545,23 @@ async function fromStreaming(
     }
 
     const delta = choice.delta ?? {};
+    for (const k of Object.keys(delta)) fields.add(k);
     if (typeof delta.content === 'string' && delta.content) {
       content += delta.content;
       onText?.(delta.content);
+    }
+    // 推理模型(DeepSeek-R1 / flash、QwQ、GLM 这类)把思维链放在单独的字段里。
+    // 不混进正文 —— 这个产品的主体是画布,几万字思维链糊进对话只会淹没它。
+    // 但必须交出去,而且要计数:烧光输出预算在思考上,表面看就是"模型什么都没说"。
+    const chunk =
+      typeof delta.reasoning_content === 'string'
+        ? delta.reasoning_content
+        : typeof delta.reasoning === 'string'
+          ? delta.reasoning
+          : '';
+    if (chunk) {
+      reasoningChars += chunk.length;
+      onReasoning?.(chunk);
     }
     for (const tc of delta.tool_calls ?? []) {
       const idx: number = typeof tc.index === 'number' ? tc.index : 0;
@@ -405,7 +628,18 @@ async function fromStreaming(
     );
   }
 
-  return { content, toolCalls, finishReason, sseEvents, bytes, truncated };
+  return {
+    content,
+    toolCalls,
+    finishReason,
+    sseEvents,
+    bytes,
+    truncated,
+    sample,
+    fields: [...fields],
+    reasoningChars,
+    usage,
+  };
 }
 
 class StallError extends Error {
@@ -433,6 +667,7 @@ export async function testConnection(opts: {
   baseUrl: string;
   apiKey: string;
   model: string;
+  maxTokens?: number | null;
 }): Promise<{ ok: true; endpoint: string; elapsedMs: number; sample: string } | { ok: false; endpoint: string; reason: string }> {
   let endpoint = '';
   const started = Date.now();
