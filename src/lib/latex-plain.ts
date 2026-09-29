@@ -35,6 +35,30 @@ const TEX_FRAC_MACROS = new Set(['frac', 'dfrac', 'tfrac']);
 /** 反斜杠后面跟这些字符是空白控制(\, \; \: \! 和 \ )。 */
 const TEX_SPACING = /[ ,;:!]/;
 
+/**
+ * 矩阵类环境:内容用 `&` 分列、`\\` 分行,外面套什么。
+ *
+ * 表里没有的环境一律**原样保留**,不猜 —— 宁可标题里多一个词,
+ * 也不要把不认识的构造吃掉。
+ */
+const TEX_ENVS: Record<string, [string, string]> = {
+  matrix: ['', ''],
+  smallmatrix: ['(', ')'],
+  pmatrix: ['(', ')'],
+  bmatrix: ['[', ']'],
+  Bmatrix: ['{', '}'],
+  vmatrix: ['|', '|'],
+  Vmatrix: ['‖', '‖'],
+  cases: ['{', ''],
+  aligned: ['', ''],
+  align: ['', ''],
+  gather: ['', ''],
+  gathered: ['', ''],
+  array: ['', ''],
+};
+/** `\begin{array}{ccc}` 后面那个 `{}` 是列格式,不是内容。 */
+const COLSPEC_ENVS = new Set(['array', 'alignedat']);
+
 /** 找到与 start 处的 `{` 配对的 `}` 下标;没有配对的返回 -1。 */
 function matchBrace(s: string, start: number): number {
   let depth = 0;
@@ -125,6 +149,13 @@ function convert(src: string): string {
         out.push(a !== null ? `${convert(a)}̄` : name);
         continue;
       }
+      // 环境起止。正常路径下 `expandEnvs` 已经把整个环境展开掉了,走到这里说明
+      // 它没能配对(缺 `\end`、环境名不认识、或者转义层数不对)。至少把环境名丢掉,
+      // 别让标题上挂一个 "beginpmatrix"。
+      if (name === 'begin' || name === 'end') {
+        takeArg();
+        continue;
+      }
 
       if (LATEX_SYMBOLS[name] !== undefined) out.push(LATEX_SYMBOLS[name]);
       else if (LATEX_DROP.has(name)) {
@@ -174,6 +205,70 @@ function convert(src: string): string {
 }
 
 /**
+ * 把 `\begin{...} ... \end{...}` 就地展开成纯文本。
+ *
+ * 不处理的话 `\begin{pmatrix}1&2\\3&4\end{pmatrix}` 会原样漏成
+ * "beginpmatrix1&2 3&4endpmatrix" —— 标题上不但挂着两个环境名,还挂着一串 `&`。
+ * 展开成 `(1, 2; 3, 4)` 之后,单元格里的东西(分式、希腊字母)照常走后面的转换,
+ * 因为它们只是被拼进了同一个字符串。
+ *
+ * 一次只展开**最先出现**的那个环境,外层先于内层。矩阵套矩阵在数学里基本不存在,
+ * 所以"外层先被拆掉、内层的 `&` 被当成外层的列"这个理论上的偏差不值得为它加一层
+ * 括号配对。
+ */
+function expandEnvs(s: string): string {
+  let out = s;
+  // 展开一个就重来一次,直到没有可展开的为止。上限只是防止写坏时死循环。
+  for (let guard = 0; guard < 20; guard++) {
+    const next = expandOneEnv(out);
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+function expandOneEnv(s: string): string {
+  const m = /\\begin\{([a-zA-Z]+\*?)\}/.exec(s);
+  if (!m) return s;
+
+  const name = m[1].replace(/\*$/, '');
+  const delims = TEX_ENVS[name];
+  // 不认识的环境原样留着,交给 convert 的兜底去清环境名
+  if (!delims) return s;
+
+  const rest = s.slice(m.index + m[0].length);
+  const end = new RegExp(`\\\\end\\{${name}\\*?\\}`).exec(rest);
+  if (!end) return s;
+
+  let body = rest.slice(0, end.index);
+  if (COLSPEC_ENVS.has(name)) body = body.replace(/^\s*\{[^{}]*\}/, '');
+
+  // 行分隔符就是 `\\`,而且**只能是偶数个反斜杠**。
+  //
+  // 「偶数」这个限制是必须的,不是洁癖:`\\\beta`(一行结束、下一行以 \beta 开头)
+  // 里那三个反斜杠是 2 个行分隔符 + 1 个命令的。按"两个以上"贪婪地吃,
+  // 会把 `\beta` 自己的反斜杠一起吃掉,变成字面量 "beta"。
+  // 而按两个一组吃,`\\` 和 `\\\\`(多转义一层的)都对,`\beta` 也留得下。
+  //
+  // 也不能加"后面不跟字母才算"那种限制:下一行的第一个单元格常常就是字母开头的
+  // (`a&b\\c&d`),那种限制会把最常见的形态当成普通文本。
+  const rows = body
+    .split(/(?:\\\\)+/)
+    .map((row) =>
+      row
+        .split('&')
+        .map((cell) => cell.trim())
+        .filter(Boolean)
+        .join(', '),
+    )
+    .filter((row) => row.length > 0);
+
+  const [open, close] = delims;
+  const shown = rows.length ? `${open}${rows.join('; ')}${close}` : '';
+  return s.slice(0, m.index) + shown + rest.slice(end.index + end[0].length);
+}
+
+/**
  * 折叠多余的转义层。
  *
  * 模型经常把 LaTeX 的反斜杠**多转义一层** —— 在 JSON 里写成 `\\times`,
@@ -201,8 +296,12 @@ export function collapseOverEscaped(s: string): string {
     name === 'overline' ||
     name === 'bar';
 
-  return s.replace(/\\\\([a-zA-Z]+)/g, (whole, name: string) =>
-    known(name) ? `\\${name}` : whole,
+  return s.replace(/\\\\([a-zA-Z]+)/g, (whole, name: string, offset: number) =>
+    // 前面紧邻的还是一个反斜杠时**不折** —— 那两个反斜杠是**换行符 `\\`**,
+    // 后面跟的是下一行的内容,不是"多转义一层的命令"。
+    // `\\` + `\beta`(矩阵里一行结束、下一行以 \beta 开头)就是这种:折了的话
+    // 会吃掉行分隔符的一个反斜杠,把 `\beta` 连人带反斜杠一起变成字面量 "beta"。
+    s[offset - 1] === '\\' || !known(name) ? whole : `\\${name}`,
   );
 }
 
@@ -230,9 +329,12 @@ function stripMarkdown(s: string): string {
 }
 
 export function latexToPlain(tex: string): string {
-  // 顺序要紧:折叠转义层必须在 **convert 之前**。convert 会把 `\\` 当成转义
-  // 字符吃掉一层,之后再折叠就晚了 —— 拿到的是半成品,分不清原本几层。
-  const prepared = lineBreakToSpace(collapseOverEscaped(tex));
+  // 顺序要紧,两条都不能挪:
+  // · 折叠转义层必须在 **convert 之前**。convert 会把 `\\` 当成转义字符吃掉一层,
+  //   之后再折叠就晚了 —— 拿到的是半成品,分不清原本几层。
+  // · 展开环境必须在 **lineBreakToSpace 之前**。那个函数会把 `\\` 换成空格,
+  //   而 `\\` 在矩阵里是**行分隔符** —— 先换掉的话矩阵就被压成一长串了。
+  const prepared = lineBreakToSpace(expandEnvs(collapseOverEscaped(tex)));
   return stripMarkdown(convert(prepared).replace(/\s+/g, ' ').trim());
 }
 

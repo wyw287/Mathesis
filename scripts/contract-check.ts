@@ -641,6 +641,63 @@ console.log('\n标题:模型多转义一层、还往里写 Markdown');
   });
 }
 
+console.log('\n标题:矩阵环境');
+
+{
+  const BS = String.fromCharCode(92);
+  const q = (s: string) => titleFor(parseSpec({ kind: 'quiz', question: s }));
+  const M = (body: string, env = 'pmatrix') => `${BS}begin{${env}}${body}${BS}end{${env}}`;
+
+  ok('行按 ;、列按 , 拍平', () => {
+    const t = q(`求 ${M(`1&2&3${BS}${BS}0&1&2${BS}${BS}0&0&1`)} 的逆`);
+    if (!t.includes('(1, 2, 3; 0, 1, 2; 0, 0, 1)')) throw new Error(t);
+  });
+
+  ok('不再漏出 begin / end / 环境名', () => {
+    // 截图里的实际症状:卡片头上写着「A=beginpmatrix1&2&3 0&1&2 0&0&…」——
+    // 环境名被当成了普通单词,列分隔符也原样留着
+    const t = q(`用伴随矩阵法求 A=${M(`1&2&3${BS}${BS}0&1&2${BS}${BS}0&0&1`)}`);
+    if (/begin|end|pmatrix/.test(t)) throw new Error(`漏出了环境名:${t}`);
+    if (t.includes('&')) throw new Error(`还留着 & :${t}`);
+  });
+
+  ok('行分隔符后面紧跟命令时,命令不能被吃掉', () => {
+    // `\\\beta` 里的三个反斜杠是「2 个行分隔 + 1 个 \beta 自己的」。
+    // 按"两个以上"贪婪地吃会把 \beta 也吃掉,拍成字面量 "beta"。
+    const t = q(M(`${BS}alpha&1${BS}${BS}${BS}beta&2`));
+    if (!t.includes('α')) throw new Error(`\\alpha 没了:${t}`);
+    if (!t.includes('β')) throw new Error(`\\beta 变成了字面量:${t}`);
+  });
+
+  ok('括号跟着环境走', () => {
+    if (!q(M(`1&0${BS}${BS}0&1`, 'bmatrix')).includes('[1, 0; 0, 1]')) throw new Error(q(M(`1&0${BS}${BS}0&1`, 'bmatrix')));
+    if (!q(M(`1&0${BS}${BS}0&1`, 'vmatrix')).includes('|1, 0; 0, 1|')) throw new Error(q(M(`1&0${BS}${BS}0&1`, 'vmatrix')));
+  });
+
+  ok('array 的列格式不会被当成内容', () => {
+    const t = q(`${BS}begin{array}{cc}1&2${BS}${BS}3&4${BS}end{array}`);
+    if (t.includes('cc')) throw new Error(`列格式漏进来了:${t}`);
+    if (!t.includes('1, 2; 3, 4')) throw new Error(t);
+  });
+
+  ok('环境后面的内容不受影响', () => {
+    const t = q(`${M(`1&0${BS}${BS}0&1`)} 的逆矩阵`);
+    if (!t.includes('的逆矩阵')) throw new Error(t);
+  });
+
+  ok('没配对上的 \\begin 也不漏环境名', () => {
+    // 模型截断或写漏 \end 时的兜底。内容留着,环境名必须清掉。
+    const t = q(`A=${BS}begin{pmatrix}1&2&3`);
+    if (/begin|pmatrix/.test(t)) throw new Error(t);
+    if (!t.includes('1')) throw new Error(`内容被吃掉了:${t}`);
+  });
+
+  ok('不认识的环境原样保留,不吃内容', () => {
+    const t = q(`${BS}begin{tikzpicture}甲--乙${BS}end{tikzpicture}`);
+    if (!t.includes('甲')) throw new Error(`内容被吃掉了:${t}`);
+  });
+}
+
 console.log('\n流程 / 逻辑图 —— 解析');
 
 const DG_SPEC = {
