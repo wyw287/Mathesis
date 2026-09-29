@@ -483,5 +483,62 @@ rejects('表达式里写赋值', {
   surface: { type: 'height', expr: 'f(x) = x^2', over: { x: [-1, 1], y: [-1, 1] } },
 }, '表达式');
 
+console.log('\n推导步骤的机器可读形式');
+
+const DERIV_CHECK = {
+  kind: 'derivation',
+  statement: 'x^2+2x+1 = (x+1)^2',
+  steps: [
+    { id: 's1', latex: '(x+1)^2', reason: '展开', check: { expr: '(x+1)^2' } },
+    { id: 's2', latex: 'x^2+2x+1', reason: '平方展开', check: { expr: 'x^2+2*x+1' } },
+  ],
+};
+
+ok('能解析出 check', () => {
+  const s = parseSpec(DERIV_CHECK);
+  if (s.kind !== 'derivation') throw new Error('kind 错了');
+  if (s.steps[1].check?.expr !== 'x^2+2*x+1') throw new Error('expr 丢了');
+});
+ok('relation 和 vars 也能带上', () => {
+  const s = parseSpec({
+    ...DERIV_CHECK,
+    steps: [
+      DERIV_CHECK.steps[0],
+      { id: 's2', latex: 'todo', reason: '求导', check: { expr: '2*x', against: 's1', relation: 'derivativeOf', vars: ['x', 'y'] } },
+    ],
+  });
+  if (s.kind !== 'derivation') throw new Error('kind 错了');
+  if (s.steps[1].check?.relation !== 'derivativeOf') throw new Error('relation 丢了');
+  if (s.steps[1].check?.vars?.length !== 2) throw new Error('vars 丢了');
+});
+ok('不给 check 是允许的(文字性的步骤)', () => {
+  const s = parseSpec({
+    ...DERIV_CHECK,
+    steps: [DERIV_CHECK.steps[0], { id: 's2', latex: 'x', reason: '假设 x>0' }],
+  });
+  if (s.kind !== 'derivation' || s.steps[1].check !== undefined) throw new Error('不该有 check');
+});
+ok('check 可以省略 against(默认比上一步)', () => {
+  const s = parseSpec(DERIV_CHECK);
+  if (s.kind !== 'derivation' || s.steps[1].check?.against !== undefined) throw new Error('不该有 against');
+});
+
+rejects('check.against 指向不存在的步骤', {
+  ...DERIV_CHECK,
+  steps: [DERIV_CHECK.steps[0], { id: 's2', latex: 'x', reason: 'r', check: { expr: 'x', against: 'zzz' } }],
+}, 'against');
+rejects('check 缺 expr', {
+  ...DERIV_CHECK,
+  steps: [{ id: 's1', latex: 'x', reason: 'r', check: { against: 's1' } }],
+}, 'expr');
+rejects('relation 用了没定义的值', {
+  ...DERIV_CHECK,
+  steps: [{ id: 's1', latex: 'x', reason: 'r', check: { expr: 'x', relation: '差不多' } }],
+}, 'relation');
+rejects('vars 是空数组', {
+  ...DERIV_CHECK,
+  steps: [{ id: 's1', latex: 'x', reason: 'r', check: { expr: 'x', vars: [] } }],
+}, 'vars');
+
 console.log(`\n${pass} 通过, ${fail} 失败\n`);
 if (fail) process.exit(1);

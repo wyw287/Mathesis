@@ -90,6 +90,27 @@ export interface Plot2DSpec {
  */
 export type GapKind = 'technical' | 'substantive' | 'unjustified' | 'assumption';
 
+/**
+ * 一步的机器可读形式,交给 CAS 核对。
+ *
+ * **为什么必须由模型额外提供**:LaTeX 是排版语言,不是语义 —— 把
+ * `\frac{d}{dx}x^2` 反解成表达式是出了名的不可靠。所以一个公式要能被核对,
+ * 就必须同时有一个 CAS 读得懂的形式。
+ *
+ * 省略 `check` 是允许的:有些步骤本来就是文字性的(引入假设、说明思路)。
+ * 但**能用表达式表达的步骤不给 `check`,等于放弃了被核对的机会**。
+ */
+export interface StepCheck {
+  /** 这一步的式子,普通数学语法(用 ^ 表示幂,不是 LaTeX) */
+  expr: string;
+  /** 与哪一步比较。省略 = 上一步。上一步是文字性的时用它跳过。 */
+  against?: string;
+  /** 默认 equivalent;derivativeOf 表示 expr 应当是 against 的导数 */
+  relation?: 'equivalent' | 'derivativeOf';
+  /** 自由变量,默认 ['x'] */
+  vars?: string[];
+}
+
 export interface DerivationStep {
   id: string;
   latex: string;
@@ -97,6 +118,7 @@ export interface DerivationStep {
   from?: string[];
   gap?: GapKind;
   detail?: string;
+  check?: StepCheck;
 }
 
 export interface DerivationSpec {

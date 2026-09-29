@@ -56,7 +56,7 @@ export function Compare({ spec, artifactId, rev, emit }: RendererProps<CompareSp
                 onParam={(name, value) => setParam(artifactId, name, value)}
               />
             ) : (
-              <Derivation spec={item.spec} artifactId={artifactId} emit={emit} />
+              <Derivation spec={item.spec} artifactId={artifactId} rev={rev} emit={emit} />
             )}
           </div>
         ))}

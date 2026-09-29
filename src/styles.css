@@ -1492,3 +1492,50 @@ button {
 .plot3d-canvas:active {
   cursor: grabbing;
 }
+
+/* ------------------------------------------------------------ 推导核对 */
+
+.derive-checking {
+  font-size: 12.5px;
+  color: var(--faint);
+  margin-bottom: 8px;
+}
+
+.verify-badge {
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 4px;
+  cursor: help;
+  flex: none;
+  font-family: var(--mono);
+}
+
+.verify-badge.vf-confirmed {
+  background: #f0fbf4;
+  color: #17663d;
+}
+
+/* 机器指出这一步是错的 —— 全项目唯一一处系统主动反驳模型的地方,
+   视觉上要压过其他徽章。 */
+.verify-badge.vf-differs {
+  background: var(--gap-unjustified-bg);
+  color: var(--gap-unjustified-fg);
+  font-weight: 600;
+}
+
+/* 「化简不出来」不是「错了」。用中性的琥珀色,和 asserted 同一套语言。 */
+.verify-badge.vf-unconfirmed {
+  background: var(--gap-substantive-bg);
+  color: var(--gap-substantive-fg);
+}
+
+.verify-badge.vf-unavailable {
+  background: var(--gap-technical-bg);
+  color: var(--gap-technical-fg);
+}
+
+/* 被机器指出错误的那一步整块提出来,而不是只靠一个小徽章 */
+.step-flagged {
+  border-left-color: var(--gap-unjustified-fg) !important;
+  background: var(--gap-unjustified-bg) !important;
+}
