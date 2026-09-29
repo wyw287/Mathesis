@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { verifyStep, type Verdict, type VerifyStatus } from '../../lib/cas';
 import type { CanvasEvent, DerivationSpec, DerivationStep, GapKind, StepCheck } from '../../types/artifact';
 import { Latex } from '../../renderers/Latex';
@@ -37,6 +37,35 @@ const VERIFY_META: Record<VerifyStatus, { mark: string; label: string; cls: stri
   unavailable: { mark: '–', label: '没法核对', cls: 'vf-unavailable' },
 };
 
+/**
+ * 核对一步。
+ *
+ * 抽出来是为了让"该和哪一步比"这个判断和核对本身在一起 —— 它俩分开的话,
+ * 看代码的人会以为 against 只是个透传字段。
+ */
+async function verifyOne(steps: DerivationStep[], step: DerivationStep): Promise<Verdict> {
+  const check = step.check!;
+  const against = resolveAgainst(steps, steps.indexOf(step), check);
+  if (against === null) {
+    return {
+      status: 'unavailable',
+      note: check.against
+        ? `要比较的那一步（${check.against}）没有提供可核对的式子`
+        : '上一步是文字性的,没有可核对的式子 —— 用 against 指明和哪一步比',
+    };
+  }
+  try {
+    return await verifyStep({
+      expr: check.expr,
+      against,
+      relation: check.relation,
+      vars: check.vars,
+    });
+  } catch (e) {
+    return { status: 'unavailable', note: `核对时出错：${(e as Error).message}` };
+  }
+}
+
 /** 这一步该和哪一步比。省略 against 就是比上一步 —— 但上一步可能是文字性的。 */
 function resolveAgainst(steps: DerivationStep[], index: number, check: StepCheck): string | null {
   if (check.against) {
@@ -48,55 +77,46 @@ function resolveAgainst(steps: DerivationStep[], index: number, check: StepCheck
 export function Derivation({ spec, artifactId, rev, emit }: Props) {
   const [open, setOpen] = useState<Set<string>>(new Set());
   const [shown, setShown] = useState(spec.collapsed ? 2 : spec.steps.length);
-  const [verdicts, setVerdicts] = useState<Record<string, Verdict>>({});
-  const [checking, setChecking] = useState(false);
 
   /**
-   * 逐条核对。
+   * 逐条核对,**只核对当前显示出来的步骤**。
    *
-   * 一步步来、每步之间让出一帧:一次典型核对是几毫秒,但病态表达式能到几百毫秒
-   * (实测),整条推导一次算完会把界面冻住。
+   * 推导默认折叠时只露出头两步,而早先的写法会把**全部**步骤都核对一遍 ——
+   * 于是学生只是扫一眼折叠的推导,就触发了整个 CAS 的下载和全部计算。
+   * 展开更多时再核对新露出来的那些。
+   *
+   * 一步步来、每步之间让出一帧:典型核对几毫秒,但复杂表达式可能上百毫秒,
+   * 整条推导一次算完会看出卡顿。
    */
+  const resultsRef = useRef(new Map<string, Verdict>());
+  const [results, setResults] = useState<Record<string, Verdict>>({});
+  const [checking, setChecking] = useState(false);
+
+  // 内容被改过,之前的结果就作废 —— 不能让旧结论留在新的步骤上
   useEffect(() => {
-    if (!spec.steps.some((s) => s.check)) {
-      setVerdicts({});
+    resultsRef.current = new Map();
+    setResults({});
+  }, [spec, rev]);
+
+  useEffect(() => {
+    const todo = spec.steps
+      .slice(0, shown)
+      .filter((s) => s.check && !resultsRef.current.has(s.id));
+
+    if (!todo.length) {
+      setChecking(false);
       return;
     }
-    let cancelled = false;
-    const out: Record<string, Verdict> = {};
-    setVerdicts({});
     setChecking(true);
+    let cancelled = false;
 
     void (async () => {
-      for (let i = 0; i < spec.steps.length; i++) {
-        const step = spec.steps[i];
-        if (!step.check) continue;
-
-        const against = resolveAgainst(spec.steps, i, step.check);
-        let verdict: Verdict;
-        if (against === null) {
-          verdict = {
-            status: 'unavailable',
-            note: step.check.against
-              ? `要比较的那一步（${step.check.against}）没有提供可核对的式子`
-              : '上一步是文字性的,没有可核对的式子 —— 用 against 指明和哪一步比',
-          };
-        } else {
-          try {
-            verdict = await verifyStep({
-              expr: step.check.expr,
-              against,
-              relation: step.check.relation,
-              vars: step.check.vars,
-            });
-          } catch (e) {
-            verdict = { status: 'unavailable', note: `核对时出错：${(e as Error).message}` };
-          }
-        }
-
+      for (const step of todo) {
         if (cancelled) return;
-        out[step.id] = verdict;
-        setVerdicts({ ...out });
+        const verdict = await verifyOne(spec.steps, step);
+        if (cancelled) return;
+        resultsRef.current.set(step.id, verdict);
+        setResults(Object.fromEntries(resultsRef.current));
         // 让出一帧,否则整条推导会一次性阻塞主线程
         await new Promise((r) => setTimeout(r, 0));
       }
@@ -106,7 +126,8 @@ export function Derivation({ spec, artifactId, rev, emit }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [spec, rev]);
+    // 刻意不依赖 results:它由本 effect 自己更新,放进来会自我重启
+  }, [spec, rev, shown]);
 
   const toggle = (id: string) => {
     setOpen((prev) => {
@@ -145,7 +166,7 @@ export function Derivation({ spec, artifactId, rev, emit }: Props) {
       <ol className="derive-steps">
         {visible.map((s, i) => {
           const gap = s.gap ? GAP_META[s.gap] : null;
-          const verdict = verdicts[s.id];
+          const verdict = results[s.id];
           const flagged = verdict?.status === 'differs';
           return (
             <li key={s.id} className={`step ${gap?.cls ?? ''} ${flagged ? 'step-flagged' : ''}`}>
