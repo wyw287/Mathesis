@@ -78,10 +78,15 @@ interface Plot2DSpec {
 type Curve =
   | { type: 'explicit';   expr: string; domain?: [number, number]; label?: string; style?: LineStyle }
   | { type: 'parametric'; x: string; y: string; t: [number, number]; label?: string; style?: LineStyle }
+  | { type: 'sequence';   expr: string; n: [number, number]; label?: string; style?: LineStyle }
   | { type: 'implicit';   eq: string; label?: string; style?: LineStyle }
-  | { type: 'vectorField'; fx: string; fy: string; density?: number }
-  | { type: 'sequence';   expr: string; n: [number, number] };   // 点列,分析里很常用
+  | { type: 'vectorField'; fx: string; fy: string; density?: number; scale?: 'fixed' | 'magnitude' }
 ```
+
+前三种是"沿着 x 或 t 走一遍"就能采样的;后两种**没有这个前提** ——
+`x^2+y^2=1` 里一个 x 对应两个 y,所以必须在视口上铺二维网格:
+`implicit` 走 marching squares,`vectorField` 逐点取箭头。实现分两路
+(`lib/math.ts` 与 `lib/field.ts`),渲染也分两路。
 
 `expr` 是受限数学表达式,**不是 JS**。由 mathjs 解析,变量是 `x`(或 `t`/`n`),
 外加 `params` 里声明的参数名。`^` 是幂运算。刻意不支持函数定义、赋值、多语句——
@@ -336,8 +341,11 @@ interface ToolResult<S> {
 **做:** `plot2d`(仅 explicit / parametric / sequence)、`derivation`、
 `quiz`、`editArtifact`、`readArtifact`、BYOK 设置、事件回传(仅 `stepConfused`)。
 
-**不做:** `implicit` 和 `vectorField`(数值采样是独立课题)、`html`(Tier 2)、
-3D、Pyodide/SymPy、动画、状态建模、Manim、Lean。
+**已补上(原属推迟清单):** `implicit` 和 `vectorField`。当初推迟的理由是
+「数值采样是独立课题」—— 确实如此,但课题本身不长:marching squares 加逐点箭头,
+一百多行,单独成 `lib/field.ts` 就够了。
+
+**不做:** `html`(Tier 2)、3D、Pyodide/SymPy、动画、状态建模、Manim、Lean。
 
 SymPy 推迟不是因为它不重要,而是因为**符号计算在第二阶段才能发挥价值**——
 它真正的用途是"验证模型给的这一步推导对不对",那需要先有推导渲染器和

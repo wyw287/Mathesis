@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { marchingSquares, sampleVectorField, toZeroForm, type Arrow, type Segment } from '../../lib/field';
 import { formatTick, niceStep, safeEval, sampleExplicit, sampleParametric } from '../../lib/math';
 import type { CanvasEvent, Curve, Plot2DSpec } from '../../types/artifact';
 import { colorAt } from './palette';
@@ -28,6 +29,16 @@ interface Sampled {
   pts: Pt[];
 }
 
+/**
+ * 走网格采样那一路的曲线。
+ *
+ * 联合类型而不是一个带可选字段的对象:隐式曲线产出线段、向量场产出箭头,
+ * 两者没有任何共性,硬塞进一个结构只会让两边都要判空。
+ */
+type GridCurve =
+  | { kind: 'implicit'; curve: Extract<Curve, { type: 'implicit' }>; index: number; segments: Segment[] }
+  | { kind: 'vectorField'; curve: Extract<Curve, { type: 'vectorField' }>; index: number; arrows: Arrow[] };
+
 export function Plot2D({ spec, scope, artifactId, rev, onParam, emit }: Props) {
   const [wrapRef, width] = useWidth<HTMLDivElement>();
   const svgRef = useRef<SVGSVGElement>(null);
@@ -40,30 +51,79 @@ export function Plot2D({ spec, scope, artifactId, rev, onParam, emit }: Props) {
   const plotW = w - PAD.l - PAD.r;
   const plotH = HEIGHT - PAD.t - PAD.b;
 
+  /**
+   * 只有这三种能"沿着 x 或 t 走一遍"。
+   * 隐式曲线和向量场一个 x 可能对应多个 y,必须铺二维网格 —— 见下面的网格 memo。
+   */
   const samples = useMemo<Sampled[]>(() => {
     const n = Math.min(3000, Math.max(400, Math.ceil(plotW * 2)));
-    return spec.curves.map((curve, index) => {
+    const out: Sampled[] = [];
+    spec.curves.forEach((curve, index) => {
       if (curve.type === 'explicit') {
         const domain = curve.domain ?? spec.view.x;
-        return { curve, index, pts: sampleExplicit(curve.expr, domain, scope, n) };
+        out.push({ curve, index, pts: sampleExplicit(curve.expr, domain, scope, n) });
+      } else if (curve.type === 'parametric') {
+        out.push({ curve, index, pts: sampleParametric(curve.x, curve.y, curve.t, scope, n) });
+      } else if (curve.type === 'sequence') {
+        // 数列:离散点,不连成线
+        const lo = Math.floor(curve.n[0]);
+        const hi = Math.min(Math.ceil(curve.n[1]), lo + 400);
+        const pts: Pt[] = [];
+        for (let k = lo; k <= hi; k++) {
+          pts.push({ x: k, y: safeEval(curve.expr, { ...scope, n: k }) });
+        }
+        out.push({ curve, index, pts });
       }
-      if (curve.type === 'parametric') {
-        return { curve, index, pts: sampleParametric(curve.x, curve.y, curve.t, scope, n) };
-      }
-      // 数列:离散点,不连成线
-      const [a, b] = curve.n;
-      const lo = Math.floor(a);
-      const hi = Math.min(Math.ceil(b), lo + 400);
-      const pts: Pt[] = [];
-      for (let k = lo; k <= hi; k++) {
-        pts.push({ x: k, y: safeEval(curve.expr, { ...scope, n: k }) });
-      }
-      return { curve, index, pts };
     });
+    return out;
   }, [spec.curves, spec.view.x, scope, plotW]);
 
-  const autoY = useMemo(() => autoYRange(samples), [samples]);
-  const view = override ?? { x: spec.view.x, y: spec.view.y ?? autoY };
+  const autoY = useMemo(
+    () => autoYRange(samples, spec.view.x[1] - spec.view.x[0], plotW, plotH),
+    [samples, spec.view.x, plotW, plotH],
+  );
+
+  // 必须 memo:它每次都构造新对象的话,下面的网格 memo 会每帧重算
+  const view = useMemo(
+    () => override ?? { x: spec.view.x, y: spec.view.y ?? autoY },
+    [override, spec.view.x, spec.view.y, autoY],
+  );
+
+  /**
+   * 隐式曲线(marching squares)和向量场(逐点取箭头)。
+   *
+   * 网格分辨率跟着画布走:太粗会把小结构整个漏掉(比如半径很小的圆),
+   * 太密则在拖滑块时卡顿。除以 4 是这两者之间的平衡点。
+   */
+  const grid = useMemo<GridCurve[]>(() => {
+    const cols = Math.min(240, Math.max(60, Math.round(plotW / 4)));
+    const rows = Math.min(180, Math.max(45, Math.round(plotH / 4)));
+    const out: GridCurve[] = [];
+    spec.curves.forEach((curve, index) => {
+      if (curve.type === 'implicit') {
+        const F = toZeroForm(curve.eq);
+        out.push({
+          kind: 'implicit',
+          curve,
+          index,
+          segments: marchingSquares((x, y) => safeEval(F, { ...scope, x, y }), view, cols, rows),
+        });
+      } else if (curve.type === 'vectorField') {
+        out.push({
+          kind: 'vectorField',
+          curve,
+          index,
+          arrows: sampleVectorField(
+            (x, y) => safeEval(curve.fx, { ...scope, x, y }),
+            (x, y) => safeEval(curve.fy, { ...scope, x, y }),
+            view,
+            curve.density ?? 14,
+          ),
+        });
+      }
+    });
+    return out;
+  }, [spec.curves, view, scope, plotW, plotH]);
 
   const tx = useCallback((x: number) => PAD.l + ((x - view.x[0]) / (view.x[1] - view.x[0])) * plotW, [view, plotW]);
   const ty = useCallback(
@@ -204,6 +264,33 @@ export function Plot2D({ spec, scope, artifactId, rev, onParam, emit }: Props) {
             );
           })}
 
+          {/* 隐式曲线:一条 path 装下所有线段,而不是每段一个 <line> ——
+              一个圆可能抽出上千段,那样 DOM 会被压垮 */}
+          {grid.map((g) =>
+            g.kind === 'implicit' ? (
+              <path
+                key={`imp-${g.index}`}
+                d={g.segments
+                  .map((s) => `M ${tx(s.x1).toFixed(2)} ${ty(s.y1).toFixed(2)} L ${tx(s.x2).toFixed(2)} ${ty(s.y2).toFixed(2)}`)
+                  .join(' ')}
+                fill="none"
+                stroke={colorAt(g.index, g.curve.style?.color)}
+                strokeWidth={g.curve.style?.width ?? 2}
+                strokeDasharray={DASH[g.curve.style?.dash ?? 'solid']}
+                strokeLinecap="round"
+              />
+            ) : (
+              <path
+                key={`vf-${g.index}`}
+                d={arrowsToPath(g.arrows, tx, ty, view, plotW, plotH, g.curve.scale ?? 'fixed')}
+                fill="none"
+                stroke={colorAt(g.index, g.curve.style?.color)}
+                strokeWidth={g.curve.style?.width ?? 1.4}
+                strokeLinecap="round"
+              />
+            ),
+          )}
+
           {(spec.points ?? []).map((p, i) => {
             const x = safeEval(p.at[0], scope);
             const y = safeEval(p.at[1], scope);
@@ -239,7 +326,7 @@ export function Plot2D({ spec, scope, artifactId, rev, onParam, emit }: Props) {
               <g key={i} transform={`translate(${PAD.l + 12}, ${PAD.t + 18 + i * 18})`}>
                 <line x1={0} y1={0} x2={20} y2={0} stroke={colorAt(i, c.style?.color)} strokeWidth={2} strokeDasharray={DASH[c.style?.dash ?? 'solid']} />
                 <text x={26} y={4} className="plot-legend">
-                  {c.label ?? (c.type === 'explicit' ? `y = ${c.expr}` : c.type === 'sequence' ? `aₙ = ${c.expr}` : '参数曲线')}
+                  {c.label ?? curveLabel(c)}
                 </text>
               </g>
             ))}
@@ -351,6 +438,59 @@ function ticks([a, b]: [number, number], step: number): number[] {
   return out;
 }
 
+/**
+ * 把所有箭头拼成一条 path。
+ *
+ * 每个箭头是"轴 + 一个 V 形头"。上千个箭头如果各用一个元素,DOM 会被压垮;
+ * 拼成一条 path 就只有一个节点,而且 V 形头用描边画也够看 ——
+ * 方向场本来就是在看方向,不需要实心箭头那点视觉重量。
+ */
+function arrowsToPath(
+  arrows: Arrow[],
+  tx: (x: number) => number,
+  ty: (y: number) => number,
+  view: { x: [number, number]; y: [number, number] },
+  plotW: number,
+  plotH: number,
+  scale: 'fixed' | 'magnitude',
+): string {
+  const LEN = 9;
+  const HEAD = 3.6;
+  const maxMag = scale === 'magnitude' ? Math.max(...arrows.map((a) => a.magnitude), 1e-12) : 1;
+  const spanX = view.x[1] - view.x[0];
+  const spanY = view.y[1] - view.y[0];
+  const parts: string[] = [];
+
+  for (const a of arrows) {
+    const px = tx(a.x);
+    const py = ty(a.y);
+    // 转成屏幕方向再归一化,否则坐标轴比例不一致时箭头指向会偏
+    const rawX = (a.u / spanX) * plotW;
+    const rawY = -(a.v / spanY) * plotH;
+    const len = Math.hypot(rawX, rawY);
+    if (!Number.isFinite(len) || len < 1e-9) continue;
+
+    const shrink = scale === 'magnitude' ? Math.min(1, a.magnitude / maxMag) : 1;
+    const ux = rawX / len;
+    const uy = rawY / len;
+    const reach = LEN * (0.4 + 0.6 * shrink);
+    const ex = px + ux * reach;
+    const ey = py + uy * reach;
+
+    const ang = Math.atan2(uy, ux);
+    const h1x = ex - HEAD * Math.cos(ang - 0.55);
+    const h1y = ey - HEAD * Math.sin(ang - 0.55);
+    const h2x = ex - HEAD * Math.cos(ang + 0.55);
+    const h2y = ey - HEAD * Math.sin(ang + 0.55);
+
+    parts.push(
+      `M ${px.toFixed(1)} ${py.toFixed(1)} L ${ex.toFixed(1)} ${ey.toFixed(1)}`,
+      `M ${h1x.toFixed(1)} ${h1y.toFixed(1)} L ${ex.toFixed(1)} ${ey.toFixed(1)} L ${h2x.toFixed(1)} ${h2y.toFixed(1)}`,
+    );
+  }
+  return parts.join(' ');
+}
+
 function pathFrom(pts: Pt[], tx: (x: number) => number, ty: (y: number) => number): string {
   let d = '';
   let pen = false;
@@ -372,14 +512,30 @@ function pathFrom(pts: Pt[], tx: (x: number) => number, ty: (y: number) => numbe
 const clampCoord = (v: number) => Math.max(-1e5, Math.min(1e5, v)).toFixed(2);
 
 /**
- * 自动 y 范围用分位数而不是 min/max。
- * 画 1/x 或 tan(x) 时 min/max 会被渐近线拉到无穷,整张图压成一条平线;
- * 取 2%~98% 分位数能让渐近线自然跑出视野,图仍然可读。
+ * 自动 y 范围。
+ *
+ * 两种策略,按有没有显式采样点分:
+ *
+ * **有采样点时**用分位数而不是 min/max。画 1/x 或 tan(x) 时 min/max 会被渐近线
+ * 拉到无穷,整张图压成一条平线;取 2%~98% 分位数能让渐近线自然跑出视野。
+ *
+ * **没有采样点时**(整张图只有隐式曲线或向量场)按画布纵横比推一个高度。
+ * 否则会落到默认的 [-1,1],而 x 范围可能是 [-3,3] —— 一个圆就被压成椭圆了。
  */
-function autoYRange(samples: Sampled[]): [number, number] {
+function autoYRange(
+  samples: Sampled[],
+  xSpan: number,
+  plotW: number,
+  plotH: number,
+): [number, number] {
   const ys: number[] = [];
   for (const s of samples) for (const p of s.pts) if (Number.isFinite(p.y)) ys.push(p.y);
-  if (!ys.length) return [-1, 1];
+
+  if (!ys.length) {
+    const half = ((xSpan / 2) * plotH) / Math.max(1, plotW);
+    return [-half, half];
+  }
+
   ys.sort((a, b) => a - b);
   const at = (q: number) => ys[Math.min(ys.length - 1, Math.max(0, Math.round(q * (ys.length - 1))))];
   let lo = at(0.02);
@@ -391,6 +547,22 @@ function autoYRange(samples: Sampled[]): [number, number] {
   if (!(hi > lo)) return [lo - 1, lo + 1];
   const pad = (hi - lo) * 0.12;
   return [lo - pad, hi + pad];
+}
+
+/** 图例文字。每种曲线都要说清楚它是什么 —— 否则隐式曲线会被标成"参数曲线"。 */
+function curveLabel(c: Curve): string {
+  switch (c.type) {
+    case 'explicit':
+      return `y = ${c.expr}`;
+    case 'parametric':
+      return `(${c.x}, ${c.y})`;
+    case 'sequence':
+      return `aₙ = ${c.expr}`;
+    case 'implicit':
+      return c.eq;
+    case 'vectorField':
+      return `向量场 (${c.fx}, ${c.fy})`;
+  }
 }
 
 function useWidth<T extends HTMLElement>() {

@@ -43,11 +43,34 @@ export interface Annotation {
 /**
  * expr 是受限数学表达式,不是 JS。变量为 x(或 t/n)加上 params 里声明的参数名。
  * 由 mathjs 解析;不允许赋值、函数定义、多语句 —— 无副作用,所以不需要沙箱。
+ *
+ * 六种变体里,前三种的采样方式是"沿着 x 或 t 走一遍";后两种没有这个前提
+ * (一个 x 可能对应多个 y),要在视口上铺二维网格,所以实现路径完全不同。
  */
 export type Curve =
   | { type: 'explicit'; expr: string; domain?: [number, number]; label?: string; style?: LineStyle }
   | { type: 'parametric'; x: string; y: string; t: [number, number]; label?: string; style?: LineStyle }
-  | { type: 'sequence'; expr: string; n: [number, number]; label?: string; style?: LineStyle };
+  | { type: 'sequence'; expr: string; n: [number, number]; label?: string; style?: LineStyle }
+  /**
+   * 隐式曲线:满足 eq 的点集。`eq` 写成 `x^2+y^2=1` 或直接写 `x^2+y^2-1`
+   * (后者视作等于 0)。这是水平集、圆、等高线、相图边界的画法。
+   */
+  | { type: 'implicit'; eq: string; label?: string; style?: LineStyle }
+  /**
+   * 向量场:每个网格点上画一个 (fx, fy) 方向的箭头。
+   * 方向场(解 ODE 草图)、梯度场、线性变换的切向量场都用它。
+   */
+  | {
+      type: 'vectorField';
+      fx: string;
+      fy: string;
+      /** 每个方向上画多少个箭头,默认 14。太大就糊成一片。 */
+      density?: number;
+      /** fixed(默认,只看方向)或 magnitude(箭头长度反映模长) */
+      scale?: 'fixed' | 'magnitude';
+      label?: string;
+      style?: LineStyle;
+    };
 
 export interface Plot2DSpec {
   kind: 'plot2d';

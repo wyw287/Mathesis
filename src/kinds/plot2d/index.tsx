@@ -46,6 +46,28 @@ export function parseExpr(v: unknown, where: string): string {
   return s;
 }
 
+/**
+ * 隐式方程的校验。
+ *
+ * 不能直接拿整串去 `parseExpr` —— 那个规则**刻意禁止等号**(为了挡掉 `f(x)=x^2`
+ * 这类赋值式)。所以按等号切成两半,各自过一遍校验,再把原串原样存下来
+ * (渲染层拿它显示,求值时用 field.ts 的 toZeroForm 化简)。
+ */
+export function parseImplicitEq(v: unknown, where: string): string {
+  const s = str(v, where);
+  const parts = s.split('=');
+  if (parts.length === 1) {
+    parseExpr(s, where); // 没等号:F(x,y),视作等于 0
+    return s;
+  }
+  if (parts.length !== 2) {
+    throw new ToolInputError(`${where} 里等号不止一个,方程要写成 x^2+y^2=1 这样的形式`);
+  }
+  parseExpr(parts[0], `${where} 等号左边`);
+  parseExpr(parts[1], `${where} 等号右边`);
+  return s;
+}
+
 function parseStyle(v: unknown, where: string): LineStyle | undefined {
   const o = optObj(v, where);
   if (!o) return undefined;
@@ -61,7 +83,11 @@ function parseStyle(v: unknown, where: string): LineStyle | undefined {
 
 function parseCurve(v: unknown, where: string): Curve {
   const o = obj(v, where);
-  const type = oneOf(o.type, ['explicit', 'parametric', 'sequence'] as const, `${where}.type`);
+  const type = oneOf(
+    o.type,
+    ['explicit', 'parametric', 'sequence', 'implicit', 'vectorField'] as const,
+    `${where}.type`,
+  );
   switch (type) {
     case 'explicit':
       return {
@@ -88,6 +114,29 @@ function parseCurve(v: unknown, where: string): Curve {
         label: optStr(o.label, `${where}.label`),
         style: parseStyle(o.style, `${where}.style`),
       };
+    case 'implicit':
+      return {
+        type,
+        eq: parseImplicitEq(o.eq, `${where}.eq`),
+        label: optStr(o.label, `${where}.label`),
+        style: parseStyle(o.style, `${where}.style`),
+      };
+    case 'vectorField': {
+      const density = optNum(o.density, `${where}.density`);
+      return {
+        type,
+        fx: parseExpr(o.fx, `${where}.fx`),
+        fy: parseExpr(o.fy, `${where}.fy`),
+        // 夹一下:太密会糊成一片,太疏看不出场的样子
+        density: density === undefined ? undefined : Math.round(Math.min(40, Math.max(4, density))),
+        scale:
+          o.scale === undefined
+            ? undefined
+            : oneOf(o.scale, ['fixed', 'magnitude'] as const, `${where}.scale`),
+        label: optStr(o.label, `${where}.label`),
+        style: parseStyle(o.style, `${where}.style`),
+      };
+    }
   }
 }
 
@@ -200,9 +249,31 @@ export const plot2dTool: TeachingTool = {
           properties: {
             type: {
               type: 'string',
-              enum: ['explicit', 'parametric', 'sequence'],
+              enum: ['explicit', 'parametric', 'sequence', 'implicit', 'vectorField'],
               description:
-                'explicit = y=f(x);parametric = 参数方程 (x(t), y(t));sequence = 数列 a_n 的点列',
+                'explicit = y=f(x);parametric = 参数方程 (x(t), y(t));sequence = 数列 a_n 的点列;' +
+                'implicit = 隐式方程(圆、椭圆、水平集、等高线、相图边界);' +
+                'vectorField = 向量场(方向场、梯度场)',
+            },
+            eq: {
+              type: 'string',
+              description:
+                'implicit 用。写成方程 x^2+y^2=1,或者直接写表达式 x^2+y^2-1(视作等于 0)。' +
+                '变量是 x 和 y,也可以引用 params 里的参数名 —— ' +
+                '把半径做成参数 x^2+y^2-a^2,学生就能拖着看圆怎么变。',
+            },
+            fx: { type: 'string', description: 'vectorField 用:x 方向分量,可用 x、y 和 params' },
+            fy: { type: 'string', description: 'vectorField 用:y 方向分量' },
+            density: {
+              type: 'number',
+              description: 'vectorField 用。每个方向上画多少个箭头,默认 14。太密会糊成一片。',
+            },
+            scale: {
+              type: 'string',
+              enum: ['fixed', 'magnitude'],
+              description:
+                'vectorField 用。fixed(默认)= 所有箭头等长,只看方向,适合方向场;' +
+                'magnitude = 箭头长度反映模长,适合看梯度的大小。',
             },
             expr: {
               type: 'string',
@@ -284,7 +355,9 @@ function title(spec: Plot2DSpec): string {
   const c = spec.curves[0];
   if (c.type === 'explicit') return clip(`y = ${c.expr}`);
   if (c.type === 'parametric') return clip(`(${c.x}, ${c.y})`);
-  return clip(`aₙ = ${c.expr}`);
+  if (c.type === 'sequence') return clip(`aₙ = ${c.expr}`);
+  if (c.type === 'implicit') return clip(c.eq);
+  return clip(`向量场 (${c.fx}, ${c.fy})`);
 }
 
 /**
