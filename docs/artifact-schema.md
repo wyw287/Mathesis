@@ -111,10 +111,10 @@ interface DerivationSpec {
 interface DerivationStep {
   id: string;
   latex: string;             // 这一步的式子 (LaTeX)
-  reason: string;            // 理由:用了哪条定义/定理/规则,一句话
+  reason: string;            // 理由:用了哪条定义/定理/规则,一句话(数学符号用 $...$)
   from?: string[];           // 依赖的 step id,构成 DAG
   gap?: GapKind;             // 见下,整个设计里最重要的一个字段
-  detail?: string;           // 展开后显示的细节
+  detail?: string;           // 展开后显示的细节 (Markdown,公式用 $...$)
 }
 
 type GapKind =
@@ -129,6 +129,13 @@ type GapKind =
 也看不出模型在哪里悄悄跳过了东西。强制模型标注 `gap`,等于强制它对自己的讲解做
 元认知。`unjustified` 尤其重要:允许模型说"这一步需要 Zorn 引理,这里不展开",
 比编一个假证明有价值得多。
+
+**`reason` 和 `detail` 是散文,但里面会有公式。** 模型写理由时很自然会顺手把符号
+写进去(`欧姆定律给出支路电流 g_{ij}(v_i - v_j)`)。这两个字段都必须过渲染器,
+不能直接打印:直接打印出来的就是带下划线和花括号的原始 LaTeX。`detail` 走
+Markdown;`reason` 走 `MathText` —— 含 `$` 时按 Markdown 处理,否则整句当公式。
+工具描述里明说了要用 `$` 括起来,因为那样走 Markdown 路径、中文之间的空格会被保留,
+而"整句当公式"那条兜底路径里 KaTeX 会按数学模式吃掉空格。
 
 ### 逐步核对(StepCheck)
 

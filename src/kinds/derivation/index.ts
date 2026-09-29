@@ -106,10 +106,20 @@ const tool: TeachingTool = {
           properties: {
             id: { type: 'string', description: '本步的唯一 id,供 from 引用' },
             latex: { type: 'string', description: '这一步的式子,LaTeX,不要加 $ 或 $$' },
-            reason: { type: 'string', description: '理由:用了哪条定义、定理或规则,一句话' },
+            reason: {
+              type: 'string',
+              description:
+                '理由:用了哪条定义、定理或规则,一句话。' +
+                '**提到数学符号时要用 $ 括起来**(比如"由 $g_{ij}$ 的定义"),' +
+                '否则符号会和中文挤在一起、下划线和花括号也会露出来。',
+            },
             from: { type: 'array', items: { type: 'string' }, description: '依赖的前置步骤 id' },
             gap: { type: 'string', enum: ['technical', 'substantive', 'unjustified', 'assumption'] },
-            detail: { type: 'string', description: '学生展开这一步时显示的补充说明' },
+            detail: {
+              type: 'string',
+              description:
+                '学生展开这一步时显示的补充说明。Markdown,公式用 $...$ 或 $$...$$ 括起来。',
+            },
             check: {
               type: 'object',
               description:

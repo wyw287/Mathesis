@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { verifyStepSafe, type Verdict, type VerifyStatus } from '../../lib/cas';
 import type { CanvasEvent, DerivationSpec, DerivationStep, GapKind, StepCheck } from '../../types/artifact';
 import { Latex } from '../../renderers/Latex';
-import { Markdown, MathBlock } from '../../renderers/Markdown';
+import { Markdown, MathBlock, MathText } from '../../renderers/Markdown';
 
 interface Props {
   spec: DerivationSpec;
@@ -180,7 +180,15 @@ export function Derivation({ spec, artifactId, rev, emit }: Props) {
               </div>
 
               <div className="step-meta">
-                <span className="step-reason">{s.reason}</span>
+                {/*
+                  reason 用 MathText 而不是直接打印 —— 模型写理由时会顺手把符号写进去
+                  (`欧姆定律给出支路电流 g_{ij}(v_i - v_j)`),而那是一个纯文本 span,
+                  露出来的就是带下划线和花括号的原始 LaTeX。别的 kind 的说明性字段
+                  (compare 的 note、counterexample 的 found)早就走了这条路,只有这里漏了。
+                */}
+                <span className="step-reason">
+                  <MathText text={s.reason} />
+                </span>
                 {gap && (
                   <span className={`gap-badge ${gap.cls}`} title={gap.hint}>
                     {gap.label}

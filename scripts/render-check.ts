@@ -8,7 +8,9 @@
  * 用 renderToStaticMarkup 在 node 里跑,不需要浏览器。
  * 运行:npm run check:render
  */
+import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { Derivation } from '../src/kinds/derivation/Derivation';
 import { Markdown, MathBlock } from '../src/renderers/Markdown';
 import { unwrap } from '../src/renderers/Latex';
 
@@ -231,6 +233,32 @@ console.log('\n换库之后:多转义折叠插件要仍然生效');
   ok('javascript: 链接被剥掉,不产生 <a>', !md('[点我](javascript:alert(1))').includes('<a '), '');
   ok('正常的 https 链接仍然是链接', md('[维基](https://zh.wikipedia.org)').includes('<a '), '');
   ok('链接带 noopener', md('[维基](https://zh.wikipedia.org)').includes('noopener'), '');
+}
+
+console.log('\n推导步骤的「理由」是散文,里面也会有公式');
+{
+  // reason 曾经是个纯文本 span。模型写理由时顺手带符号("支路电流 g_{ij}(v_i - v_j)"),
+  // 学生看到的就是带下划线和花括号的原始 LaTeX —— 这条用例盯的就是那个。
+  //
+  // 必须用 createElement 而不是像上面那样直接调用组件:Derivation 有 useState,
+  // 当函数调会在 renderToStaticMarkup 外面触发 hook。
+  const step = (reason: string) => ({
+    kind: 'derivation' as const,
+    steps: [{ id: 's1', latex: String.raw`I_i = \sum_j g_{ij}(v_i - v_j)`, reason, gap: 'substantive' as const }],
+  });
+  const render = (reason: string) =>
+    renderToStaticMarkup(createElement(Derivation, { spec: step(reason), artifactId: 'a', rev: 1, emit: () => {} }));
+
+  // 步骤的 latex 走 <Latex>,它靠 effect 注入 HTML,在 SSR 下是空 span。
+  // 所以输出里出现的 katex 只可能来自 reason —— 这条断言不会被 latex 蒙混过去。
+  const okCase = render(String.raw`欧姆定律给出支路电流 $g_{ij}(v_i - v_j)$,KCL 要求流出节点 $i$ 的电流之和等于外部注入`);
+  ok('带 $ 的理由渲染成公式', okCase.includes('katex'), okCase.slice(0, 160));
+  ok('而且 $ 定界符本身不显示出来', !okCase.includes('$'), okCase.slice(0, 160));
+
+  // 没有 $ 的兜底路径:MathText 会把整句交给 KaTeX。SSR 下它同样是空 span,
+  // 但关键是**原始 LaTeX 不能再出现** —— 修复前这里打印的就是那段裸文本。
+  const bareCase = render(String.raw`欧姆定律给出支路电流 g_{ij}(v_i - v_j);KCL 要求流出节点 i 的电流之和等于外部注入`);
+  ok('没有 $ 时也不原样打印裸 LaTeX', !bareCase.includes('g_{ij}'), bareCase.slice(0, 160));
 }
 
 console.log(`\n${pass} 通过, ${fail} 失败\n`);

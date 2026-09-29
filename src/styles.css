@@ -657,6 +657,13 @@ button {
   color: var(--muted);
 }
 
+/* 理由走 MathText 渲染,含 $ 时它包一层 <p>。默认外边距会把这一行撑开、
+   把旁边的徽章挤偏 —— 这里要的是"和徽章并排的一句话",不是一段。 */
+.step-reason p {
+  margin: 0;
+  display: inline;
+}
+
 .step-from {
   font-family: var(--mono);
   font-size: 11px;
