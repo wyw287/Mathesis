@@ -9,6 +9,7 @@
  */
 import { parseSpec, titleFor, reconcileArtifacts } from '../src/kinds/registry';
 import { evaluateAll } from '../src/kinds/counterexample/checks';
+import { collapseOverEscaped } from '../src/lib/latex-plain';
 import { extractArtifactBlocks, stripArtifactBlocks } from '../src/llm/fallback';
 import { ToolInputError } from '../src/lib/validate';
 import { CURRENT_SCHEMA_VERSION, type CanvasArtifact } from '../src/types/artifact';
@@ -720,6 +721,49 @@ rejects('role 用了没定义的值', {
 }, 'role');
 rejects('direction 用了没定义的值', { ...DG_SPEC, direction: 'up' }, 'direction');
 rejects('节点缺 label', { kind: 'diagram', nodes: [{ id: 'x' }] }, 'label');
+
+console.log('\n转义折叠:该折的折,不该折的不许碰');
+
+{
+  const BS = String.fromCharCode(92);
+  const collapse = (s: string) => collapseOverEscaped(s);
+
+  // 该折的
+  ok('双反斜杠的命令被折成单层', () => {
+    if (collapse(`2${BS}${BS}times2`) !== `2${BS}times2`) throw new Error(collapse(`2${BS}${BS}times2`));
+  });
+  ok('分式也折', () => {
+    const got = collapse(`${BS}${BS}frac{1}{2}`);
+    if (got !== `${BS}frac{1}{2}`) throw new Error(got);
+  });
+
+  // **不该折的** —— 这几条比上面更要紧。合法 LaTeX 里的 `\\` 是换行符,
+  // 矩阵和 aligned 环境全靠它,折错了整块公式就毁了。
+  ok('真正的换行(后面是空格)不许碰', () => {
+    const src = `a ${BS}${BS} b`;
+    if (collapse(src) !== src) throw new Error(`被误折成 ${collapse(src)}`);
+  });
+  ok('aligned 里的换行不许碰', () => {
+    const src = `${BS}begin{aligned}a&=b ${BS}${BS} c&=d${BS}end{aligned}`;
+    if (collapse(src) !== src) throw new Error(`被误折成 ${collapse(src)}`);
+  });
+  ok('换行后跟可选间距参数(\\\\[2pt])不许碰', () => {
+    const src = `a ${BS}${BS}[2pt] b`;
+    if (collapse(src) !== src) throw new Error(`被误折成 ${collapse(src)}`);
+  });
+  ok('换行后跟括号不许碰', () => {
+    const src = `a ${BS}${BS}(b)`;
+    if (collapse(src) !== src) throw new Error(`被误折成 ${collapse(src)}`);
+  });
+  ok('单层的命令本来就不该动', () => {
+    const src = `${BS}times`;
+    if (collapse(src) !== src) throw new Error(`被改了 ${collapse(src)}`);
+  });
+  ok('不认识的命令名也不动(宁可漏折,不可乱折)', () => {
+    const src = `${BS}${BS}不认识`;
+    if (collapse(src) !== src) throw new Error(`被改了 ${collapse(src)}`);
+  });
+}
 
 console.log(`\n${pass} 通过, ${fail} 失败\n`);
 if (fail) process.exit(1);

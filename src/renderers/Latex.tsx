@@ -34,27 +34,30 @@ interface Props {
 
 /** KaTeX 渲染。渲染失败时退回原始 LaTeX —— 总比一片空白好,而且能看到错在哪。 */
 export function Latex({ tex, display = false }: Props) {
-  const source = useMemo(() => unwrap(tex), [tex]);
+  /**
+   * 折叠多余的转义层 —— **提前做,不是出错才做**。
+   *
+   * 这是上一版写错的地方:`2\\times2` 对 KaTeX 来说**根本不是错误** ——
+   * 它把 `\\` 当成换行符,规规矩矩渲染出一个断行。所以"渲染失败才折叠"的
+   * 策略永远碰不到它:输出既不报错也不空白,只是**凭空多了一行**。
+   *
+   * 这个折叠只对 `\\` 后面紧跟**已知命令名**的情况生效,而这种写法在合法
+   * LaTeX 里不存在 —— 矩阵换行、`aligned` 里的 `\\` 后面总是空格或 `[`。
+   * 所以提前折叠不会误伤。
+   */
+  const source = useMemo(() => collapseOverEscaped(unwrap(tex)), [tex]);
 
   const html = useMemo(() => {
     if (!source) return null;
-    const options = { displayMode: display, throwOnError: true, strict: false, trust: false };
     try {
-      return katex.renderToString(source, options);
+      return katex.renderToString(source, {
+        displayMode: display,
+        throwOnError: true,
+        strict: false,
+        trust: false,
+      });
     } catch {
-      // 有些模型把反斜杠多转义了一层(`\times`)。那在 LaTeX 里是**换行符**,
-      // 渲染出来要么报错、要么变成莫名其妙的分行 —— 看起来像模型写错了公式,
-      // 其实是转义层数的问题。
-      //
-      // 判据交给 KaTeX 自己:原样不行就试折叠过的。**不猜**,因为猜错的代价是
-      // 把一个本来正确的公式改坏。
-      const collapsed = collapseOverEscaped(source);
-      if (collapsed === source) return null;
-      try {
-        return katex.renderToString(collapsed, options);
-      } catch {
-        return null;
-      }
+      return null;
     }
   }, [source, display]);
 

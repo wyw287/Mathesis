@@ -44,10 +44,16 @@ const tool: TeachingTool = {
   parameters: {
     type: 'object',
     properties: {
-      question: { type: 'string', description: '题目,LaTeX 或 Markdown' },
+      question: {
+        type: 'string',
+        description:
+          '题目。可以写 Markdown(加粗、列表)。' +
+          '**数学式必须用 $ 包起来**,例如「关于 $2\times2$ 矩阵 A 的奇异值」。' +
+          '不包的话它会被当成普通文字原样显示出来 —— 不会被渲染成公式。',
+      },
       choices: {
         type: 'array',
-        description: '选项。省略则为自由作答。',
+        description: '选项。省略则为自由作答。选项文字里的数学式同样要用 $ 包起来。',
         items: {
           type: 'object',
           properties: { id: { type: 'string' }, text: { type: 'string' } },
@@ -55,7 +61,7 @@ const tool: TeachingTool = {
         },
       },
       answerKey: { type: 'array', items: { type: 'string' }, description: '正确选项的 id。作答前不会展示给学生。' },
-      explanation: { type: 'string', description: '作答后展示的解析' },
+      explanation: { type: 'string', description: '作答后展示的解析。数学式用 $ 包起来。' },
       freeformPlaceholder: { type: 'string' },
     },
     required: ['question'],
