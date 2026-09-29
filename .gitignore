@@ -1,7 +1,25 @@
+# 依赖与构建产物
 node_modules
 dist
 dist-ssr
-*.local
-.DS_Store
 .vite
+
+# 本地临时文件:截图、探针脚本、任何随手丢进来的东西。
+# 这个目录存在的意义就是"不进仓库"。
 tmp/
+
+# 密钥。这个项目本身不需要 .env —— 配置走设置界面、存在浏览器里 ——
+# 但万一以后有人加一个,别让它悄悄跟着提交上去。
+.env
+.env.*
+*.local
+
+# 编辑器与系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+npm-debug.log*
