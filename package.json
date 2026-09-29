@@ -8,11 +8,13 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "check": "npm run check:contract && npm run check:client && npm run check:render && npm run check:agent",
+    "check": "npm run check:contract && npm run check:client && npm run check:render && npm run check:agent && npm run check:storage && npm run check:store",
     "check:contract": "esbuild scripts/contract-check.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/contract-check.mjs --log-level=warning && node node_modules/.cache/contract-check.mjs",
     "check:client": "esbuild scripts/client-check.ts --bundle --platform=node --format=esm --outfile=node_modules/.cache/client-check.mjs --log-level=warning && node node_modules/.cache/client-check.mjs",
     "check:render": "esbuild scripts/render-check.ts --bundle --platform=node --format=cjs --outfile=node_modules/.cache/render-check.cjs --log-level=warning && node node_modules/.cache/render-check.cjs",
-    "check:agent": "esbuild scripts/agent-check.ts --bundle --platform=node --format=cjs --outfile=node_modules/.cache/agent-check.cjs --log-level=warning && node node_modules/.cache/agent-check.cjs"
+    "check:agent": "esbuild scripts/agent-check.ts --bundle --platform=node --format=cjs --outfile=node_modules/.cache/agent-check.cjs --log-level=warning && node node_modules/.cache/agent-check.cjs",
+    "check:storage": "esbuild scripts/storage-check.ts --bundle --platform=node --format=cjs --outfile=node_modules/.cache/storage-check.cjs --log-level=warning && node node_modules/.cache/storage-check.cjs",
+    "check:store": "esbuild scripts/store-check.ts --bundle --platform=node --format=cjs --outfile=node_modules/.cache/store-check.cjs --log-level=warning && node node_modules/.cache/store-check.cjs"
   },
   "dependencies": {
     "katex": "^0.16.11",

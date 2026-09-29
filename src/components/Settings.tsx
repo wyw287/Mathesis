@@ -171,7 +171,7 @@ export function Settings({ onClose }: Props) {
         </small>
 
         <p className="warn">
-          API Key 只存在这台浏览器的 localStorage 里，不会上传到任何服务器。
+          API Key 只存在这台浏览器里（本地数据库，明文），不会上传到任何服务器。
           但这也意味着：不要在公用电脑上填。
         </p>
 

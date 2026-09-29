@@ -478,14 +478,39 @@ export function buildSystemPrompt(toolsMode: boolean): string {
   return toolsMode ? SYSTEM_PROMPT : `${SYSTEM_PROMPT}\n${FALLBACK_INSTRUCTION}\n\n## 可用 spec 说明\n\n${toolsAsText()}`;
 }
 
-/** 首次进入或重置对话时调用:把 system 消息放进协议历史。 */
+/**
+ * 保证发给模型的历史里有一条最新的 system 消息,必要时从对话重建历史。
+ *
+ * 历史为空但对话还在,有两种情况:刷新了页面,或者刚切到另一个会话。
+ * 这时从 `messages` 重建一份"贫化"历史,让模型至少知道聊过什么。
+ *
+ * **两条必须守住的约束:**
+ *
+ * 一、**只在历史为空时重建。** 否则「切走再切回」会把富含工具上下文的实时历史
+ * 覆盖成贫化版 —— 那是不可逆的降级。
+ *
+ * 二、**绝不试图还原 `tool_calls`。** DeepSeek 的规则是:请求带 tools 时,历史里
+ * assistant 的 `reasoning_content` 必须完整回传,漏传直接 400。而 reasoning 是
+ * 故意不落盘的,所以还原 `tool_calls` 必然缺 reasoning、**必然 400**。
+ * 重建只产出普通文本消息。
+ */
 export function ensureSystemMessage(): void {
   const store = useSession.getState();
-  const toolsMode = store.settings.toolsEnabled;
+  // 按**当前**的设置拼 —— toolsEnabled 可能已因 ToolUnsupportedError 被降级改过
+  const system: ApiMessage = { role: 'system', content: buildSystemPrompt(store.settings.toolsEnabled) };
   const api = store.apiHistory;
+
   if (api.length && (api[0] as any)?.role === 'system') {
-    useSession.setState({ apiHistory: [{ role: 'system', content: buildSystemPrompt(toolsMode) }, ...api.slice(1)] });
+    useSession.setState({ apiHistory: [system, ...api.slice(1)] });
     return;
   }
-  store.pushApi({ role: 'system', content: buildSystemPrompt(toolsMode) } as ApiMessage);
+  if (api.length) {
+    useSession.setState({ apiHistory: [system, ...api] });
+    return;
+  }
+
+  const rebuilt: ApiMessage[] = store.messages
+    .filter((m) => m.role !== 'notice') // notice 是界面提示,模型不该看到
+    .map((m) => ({ role: m.role, content: m.content }));
+  useSession.setState({ apiHistory: [system, ...rebuilt] });
 }

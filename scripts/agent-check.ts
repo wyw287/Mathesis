@@ -66,7 +66,29 @@ function serve(replies: Reply[]) {
   });
 }
 
-function reset(url: string) {
+/**
+ * 等异步水合完成。
+ *
+ * 这件事在测试里是必须的:persist 的 merge 会**整体替换**活工作集,
+ * 而水合是异步的。如果测试在它完成之前就写了状态,merge 落地时会把那些写入
+ * 全部抹掉 —— 表现为"消息凭空消失",而且和被测代码毫无关系。
+ *
+ * (生产里由 App 的 hydrated 门控挡住,用户操作不可能早于水合。)
+ */
+function waitHydrated(): Promise<void> {
+  if (useSession.getState().hydrated) return Promise.resolve();
+  return new Promise((resolve) => {
+    const unsub = useSession.subscribe((s) => {
+      if (s.hydrated) {
+        unsub();
+        resolve();
+      }
+    });
+  });
+}
+
+async function reset(url: string) {
+  await waitHydrated();
   useSession.setState({
     messages: [],
     apiHistory: [],
@@ -111,7 +133,7 @@ async function main() {
       { content: '前半段。', finish: 'length' },
       { content: '后半段。', finish: 'stop' },
     ]);
-    reset(s.url);
+    await reset(s.url);
     await send({ text: '讲一下' });
 
     ok('确实发了第二次请求', s.requests.length === 2, `发了 ${s.requests.length} 次`);
@@ -135,7 +157,7 @@ async function main() {
     // 也就是说模型看得到自己上一轮想到哪儿 —— 再给一份预算它可能接着往下想。
     // 不带 tools 时 reasoning_content 会被忽略、不进上下文,那时重试才是纯浪费。
     const s = await serve([{ reasoning: '想了很多很多', finish: 'length' }]);
-    reset(s.url);
+    await reset(s.url);
     await send({ text: '讲一下' });
 
     ok('会重试,且封顶(1 次首答 + 3 次重试)', s.requests.length === 4, `发了 ${s.requests.length} 次`);
@@ -155,7 +177,7 @@ async function main() {
   {
     // 不带 tools:reasoning_content 会被忽略、不进上下文,重试毫无意义 —— 一次就停。
     const s = await serve([{ reasoning: '想了很多很多', finish: 'length' }]);
-    reset(s.url);
+    await reset(s.url);
     useSession.getState().setSettings({ toolsEnabled: false });
     await send({ text: '讲一下' });
 
@@ -168,7 +190,7 @@ async function main() {
   {
     // 每一轮都返回正文但都被截断 —— 必须停下来,不能无限续。
     const s = await serve([{ content: '一段。', finish: 'length' }]);
-    reset(s.url);
+    await reset(s.url);
     await send({ text: '讲一下' });
 
     ok('续写次数封顶(1 次首答 + 3 次续写)', s.requests.length === 4, `发了 ${s.requests.length} 次`);
@@ -186,7 +208,7 @@ async function main() {
       { reasoning: '第一轮的思考', content: '第一轮回答', finish: 'stop' },
       { reasoning: '第二轮的思考', content: '第二轮回答', finish: 'stop' },
     ]);
-    reset(s.url);
+    await reset(s.url);
     await send({ text: '第一个问题' });
     await send({ text: '第二个问题' });
 
@@ -203,7 +225,7 @@ async function main() {
     // 删除走 UI 按钮直接改 store。不告诉它的话,下一轮它只看到目录里少了一项,
     // 分不清"被删了"和"从没存在过"。
     const s = await serve([{ content: '好', finish: 'stop' }]);
-    reset(s.url);
+    await reset(s.url);
     const id = useSession.getState().addArtifact({ kind: 'quiz', question: '这个极限存在吗?' }, '测验：这个极限存在吗?', 'ai');
     useSession.getState().pushEvent({ type: 'remove', artifactId: id, title: '测验：这个极限存在吗?' });
     useSession.getState().removeArtifact(id);
@@ -221,7 +243,7 @@ async function main() {
 
   {
     const s = await serve([{ content: '好', finish: 'stop' }]);
-    reset(s.url);
+    await reset(s.url);
     const id = useSession
       .getState()
       .addArtifact({ kind: 'plot2d', view: { x: [0, 1] }, curves: [{ type: 'explicit', expr: 'x' }] }, 'y = x', 'ai');
@@ -243,7 +265,7 @@ async function main() {
   {
     // 从没交互过的条目不加标注 —— 否则目录会被一堆"没碰过"撑爆
     const s = await serve([{ content: '好', finish: 'stop' }]);
-    reset(s.url);
+    await reset(s.url);
     useSession.getState().addArtifact({ kind: 'quiz', question: 'q' }, '测验：q', 'ai');
     await send({ text: '看看' });
     const content = JSON.parse(JSON.stringify(s.requests[0])).messages.at(-1).content as string;
@@ -261,7 +283,7 @@ async function main() {
       },
       { content: '画好了。', finish: 'stop' },
     ]);
-    reset(s.url);
+    await reset(s.url);
     await send({ text: '画个图' });
 
     ok('工具调用后回到模型继续', s.requests.length === 2, `发了 ${s.requests.length} 次`);
@@ -277,7 +299,7 @@ async function main() {
       { content: '', finish: 'tool_calls', toolCalls: [{ index: 0, id: 'c1', function: { name: 'plot2d', arguments: '{"view":{"x":[5,-5]},"curves":[]}' } }] },
       { content: '我改了一下。', finish: 'stop' },
     ]);
-    reset(s.url);
+    await reset(s.url);
     await send({ text: '画个图' });
 
     const second = JSON.stringify(s.requests[1] ?? {});
