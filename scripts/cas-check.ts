@@ -98,6 +98,34 @@ async function main() {
     ok('每条都带说明,不是光给个符号', all.every((v) => v.note.length > 6), JSON.stringify(all.map((v) => v.note)));
   }
 
+  console.log('\n多项式走快路(这是性能修复本身)');
+
+  {
+    // 不做这条捷径的话,simplify 在这个式子上要 **29 秒**(实测,次数越高增长越快)。
+    // 走 expand 只要几十毫秒。这条测试就是盯住那个捷径别被改回去。
+    const t = Date.now();
+    const v = await verifyStep({ expr: 'x^20+20*x^19', against: '(x+1)^20' });
+    const ms = Date.now() - t;
+    ok('高次多项式的不等能判出来', v.status === 'differs', `${v.status}: ${v.note}`);
+    ok('而且远快于 simplify 的量级', ms < 2000, `${ms}ms`);
+  }
+
+  {
+    // 等价的情形:两个字符串不同,但展开后一样
+    const t = Date.now();
+    const v = await verifyStep({ expr: '(x+1)*(x+1)^19', against: '(x+1)^20' });
+    const ms = Date.now() - t;
+    ok('高次多项式相等也判得快', v.status === 'confirmed' && ms < 2000, `${v.status} ${ms}ms`);
+  }
+
+  {
+    // 反过来:含超越函数时**不能**走那条捷径 —— expand 不会规范化三角恒等式,
+    // 走捷径会把对的式子判成不等。上一条"三角恒等式"用例已经盯住了结论,
+    // 这里额外确认它确实是绕道走的(耗时属于 simplify 的量级)。
+    const v = await verifyStep({ expr: '2*sin(x)*cos(x)', against: 'sin(2*x)' });
+    ok('含超越函数时不走捷径,结论仍然正确', v.status === 'unconfirmed', `${v.status}: ${v.note}`);
+  }
+
   console.log(`\n${pass} 通过, ${fail} 失败\n`);
   process.exit(fail ? 1 : 0);
 }

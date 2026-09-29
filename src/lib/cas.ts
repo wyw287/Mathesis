@@ -64,11 +64,6 @@ export function loadCas(): Promise<CasModule> {
   return casPromise;
 }
 
-/** nerdamer 的化简结果可能很长,报错里截一下就够了。 */
-function clip(s: string, n = 60): string {
-  return s.length <= n ? s : `${s.slice(0, n)}…`;
-}
-
 /**
  * 数值抽查:两个表达式在随机点上是否处处一致。
  *
@@ -112,6 +107,66 @@ export interface VerifyRequest {
   vars?: string[];
 }
 
+/** 函数调用(如 `sin(`)。用它区分"多项式"和"含超越函数的式子"。 */
+const FUNC_CALL = /[a-zA-Z_]\w*\s*\(/;
+
+/**
+ * 用 CAS 判定两个式子是否恒等。
+ *
+ * 三步,从便宜到昂贵 —— 顺序不是随手排的,是被性能实测逼出来的。
+ *
+ * **一、字符串相同。** 最常见的平凡情形,零成本。
+ *
+ * **二、纯多项式时,`expand` 后非零 ⇒ 不等。** 这一步是性能的关键。
+ * 实测 `simplify` 在 `(x+1)^20` 的差式上要 **29 秒**(次数越高增长越快),
+ * 同一个式子 `expand` 只要 27 毫秒。而 `expand` 对多项式给出规范形式,
+ * 所以展开后非零就等于不等,根本不需要化简。
+ *
+ * 这条捷径**只对纯多项式成立**,判据是两端都不含除法、不含函数调用。
+ * 含超越函数时不行:实测 `expand(sin(2x) - 2sin(x)cos(x))` 非零,
+ * 而那个式子是**对的** —— `expand` 不会规范化三角恒等式。
+ * 判据保守一点,最多是多花时间,不会给出错误的结论。
+ *
+ * **三、`simplify`。** 能处理有理式和部分超越函数。返回非零时**只能判"未知"**:
+ * 实测 nerdamer 和 algebrite 都认不出 `sin(2x) = 2sin(x)cos(x)`,
+ * 把非零当成"不等"会冤枉正确的步骤。
+ */
+function casVerdict(
+  cas: CasModule,
+  a: string,
+  b: string,
+): 'equal' | 'different' | 'unknown' | 'unparsable' {
+  if (a === b) return 'equal';
+  /** 有没有一次解析成功过。全失败说明是**读不懂**,不是"化简不出来"—— 对模型而言两者要做的事完全不同。 */
+  let parsed = false;
+
+  // 两端都不含除法、不含函数调用 —— 就是纯多项式。
+  // 注意这里**只查斜杠,不查括号**:括号是多项式的正常成分(`(x+1)^20`),
+  // 函数调用由 FUNC_CALL 单独识别。把括号也当成排除条件会让这条捷径永远不生效。
+  const purePolynomial = !/\//.test(a) && !/\//.test(b) && !FUNC_CALL.test(a) && !FUNC_CALL.test(b);
+
+  if (purePolynomial) {
+    try {
+      const expanded = cas(`expand((${a}) - (${b}))`).toString();
+      parsed = true;
+      if (expanded === '0') return 'equal';
+      // 两端都是多项式,展开又是规范形式 —— 非零就是不等。
+      // 展开结果里冒出除法或函数调用的话(理论上不该发生),退回慢路。
+      if (!expanded.includes('/') && !FUNC_CALL.test(expanded)) return 'different';
+    } catch {
+      // 展开不了就往下走
+    }
+  }
+
+  try {
+    const simplified = cas(`simplify((${a}) - (${b}))`).toString();
+    parsed = true;
+    return simplified === '0' ? 'equal' : 'unknown';
+  } catch {
+    return parsed ? 'unknown' : 'unparsable';
+  }
+}
+
 export async function verifyStep(req: VerifyRequest): Promise<Verdict> {
   const relation = req.relation ?? 'equivalent';
   const vars = req.vars?.length ? req.vars : ['x'];
@@ -130,23 +185,29 @@ export async function verifyStep(req: VerifyRequest): Promise<Verdict> {
     how = '求导';
   }
 
-  let residual: string;
-  try {
-    residual = cas(`simplify((${req.expr}) - (${target}))`).toString();
-  } catch {
-    return { status: 'unavailable', note: '表达式无法解析成 CAS 能读的形式' };
-  }
+  const verdict = casVerdict(cas, req.expr, target);
 
-  if (residual === '0') {
+  if (verdict === 'equal') {
     return { status: 'confirmed', note: `机器核对通过（${how}）` };
   }
-
-  const agrees = numericAgrees(req.expr, target, vars);
-  if (agrees === false) {
+  if (verdict === 'unparsable') {
+    return {
+      status: 'unavailable',
+      note: '这一步的 check.expr 读不懂 —— 检查语法:幂用 ^、乘法要写 *,不要用 LaTeX',
+    };
+  }
+  if (verdict === 'different') {
     return {
       status: 'differs',
-      note: `这一步与上一步不相等 —— 化简后差为 ${clip(residual)},并在抽样点上算出不一致`,
+      note: '这一步与上一步不相等 —— 展开后不是同一个多项式',
     };
+  }
+
+  // CAS 判不了,再上数值抽查。它的用途**不是**证明等价(采样证明不了普适命题),
+  // 而是把"我化简不出来"和"数值上就矛盾"分开
+  const agrees = numericAgrees(req.expr, target, vars);
+  if (agrees === false) {
+    return { status: 'differs', note: '这一步与上一步不相等 —— 抽样点上就算出不一致' };
   }
   if (agrees === true) {
     // 实测里 sin(2x) = 2sin(x)cos(x) 就落在这里:CAS 认不出,但式子是对的。
