@@ -263,8 +263,54 @@ export type ArtifactSpec =
   | CounterexampleSpec
   | CompareSpec
   | Plot3DSpec
-  | LinearSpec;
+  | LinearSpec
+  | DiagramSpec;
 export type ArtifactKind = ArtifactSpec['kind'];
+
+// ---------------------------------------------------------------- 流程 / 逻辑图
+
+/**
+ * 节点在论证里的角色。**这是这个 kind 的教学价值所在** ——
+ * 一张所有节点长得一样的图只说明了"谁连着谁",说不出"谁是这个证明的关键"。
+ *
+ * 和 `derivation` 的 `gap`、反例工作台的三种可信度是同一条思路:
+ * 让学生一眼看出结构里哪些地方是要紧的。
+ */
+export type DiagramRole = 'plain' | 'given' | 'key' | 'conclusion';
+
+export interface DiagramNodeSpec {
+  id: string;
+  /** 节点内容。LaTeX 或普通文字,混排也认。 */
+  label: string;
+  role?: DiagramRole;
+}
+
+export interface DiagramEdgeSpec {
+  from: string;
+  to: string;
+  /** 边上的标注,例如「取反」「n > N」 */
+  label?: string;
+}
+
+/**
+ * 流程 / 逻辑图。
+ *
+ * 和 `derivation` 的边界很清楚:
+ *   derivation 是**线性**的步骤链,每步带理由、可以被机器核对
+ *   diagram    是**图结构**,有分支和汇合
+ * 前者回答"这个推导怎么走",后者回答"这些命题之间谁依赖谁""分几种情况"。
+ *
+ * **坐标由系统自动算**(lib/graph-layout),模型只写节点和边。让它自己排位置的话
+ * 会得到一张重叠成团的图 —— 而它看不见自己排出来的东西。
+ */
+export interface DiagramSpec {
+  kind: 'diagram';
+  nodes: DiagramNodeSpec[];
+  edges: DiagramEdgeSpec[];
+  /** 层的推进方向,默认向下。 */
+  direction?: 'down' | 'right';
+  note?: string;
+}
 
 // ---------------------------------------------------------------- 线代
 

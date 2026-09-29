@@ -640,5 +640,86 @@ console.log('\n标题:模型多转义一层、还往里写 Markdown');
   });
 }
 
+console.log('\n流程 / 逻辑图 —— 解析');
+
+const DG_SPEC = {
+  kind: 'diagram',
+  nodes: [
+    { id: 'a', label: '前提', role: 'given' },
+    { id: 'b', label: '引理', role: 'key' },
+    { id: 'c', label: '结论', role: 'conclusion' },
+  ],
+  edges: [
+    { from: 'a', to: 'b' },
+    { from: 'b', to: 'c', label: '取反' },
+  ],
+};
+
+ok('能解析出节点和边', () => {
+  const s = parseSpec(DG_SPEC);
+  if (s.kind !== 'diagram') throw new Error('kind 错了');
+  if (s.nodes.length !== 3 || s.edges.length !== 2) throw new Error('数量不对');
+  if (s.edges[1].label !== '取反') throw new Error('边上的标注丢了');
+});
+ok('三种语义角色都能解析', () => {
+  const s = parseSpec(DG_SPEC);
+  if (s.kind !== 'diagram') throw new Error('kind 错了');
+  if (s.nodes[0].role !== 'given' || s.nodes[1].role !== 'key') throw new Error('role 丢了');
+});
+ok('不填 role 时是 undefined(落到普通样式)', () => {
+  const s = parseSpec({ kind: 'diagram', nodes: [{ id: 'x', label: 'x' }] });
+  if (s.kind !== 'diagram' || s.nodes[0].role !== undefined) throw new Error('不该有 role');
+});
+ok('可以没有边(只有节点)', () => {
+  const s = parseSpec({ kind: 'diagram', nodes: [{ id: 'x', label: 'x' }] });
+  if (s.kind !== 'diagram' || s.edges.length !== 0) throw new Error('edges 应当为空数组');
+});
+ok('方向', () => {
+  const s = parseSpec({ ...DG_SPEC, direction: 'right' });
+  if (s.kind !== 'diagram' || s.direction !== 'right') throw new Error('方向丢了');
+});
+ok('标题优先用 note', () => {
+  const s = parseSpec({ ...DG_SPEC, note: '证明的结构' });
+  if (titleFor(s) !== '证明的结构') throw new Error(`得到 ${titleFor(s)}`);
+});
+ok('没有 note 时用关键节点的标签', () => {
+  const t = titleFor(parseSpec(DG_SPEC));
+  if (!t.includes('引理')) throw new Error(`得到 ${t}`);
+});
+
+// 这条最要紧:不报的话布局会**静默丢掉**那条边,学生看到的图上凭空少一条关系
+rejects('边指向不存在的节点', {
+  ...DG_SPEC,
+  edges: [{ from: 'a', to: '不存在' }],
+}, '不存在');
+rejects('边引用不存在的起点', {
+  ...DG_SPEC,
+  edges: [{ from: 'zzz', to: 'c' }],
+}, 'zzz');
+ok('报错信息里列出了已定义的节点,好让模型自己改', () => {
+  try {
+    parseSpec({ ...DG_SPEC, edges: [{ from: 'a', to: 'nope' }] });
+  } catch (e) {
+    const m = (e as Error).message;
+    if (!m.includes('a') || !m.includes('b') || !m.includes('c')) throw new Error(`没列出可用节点:${m}`);
+    return;
+  }
+  throw new Error('本该被拒绝');
+});
+
+rejects('节点 id 重复', { ...DG_SPEC, nodes: [...DG_SPEC.nodes, { id: 'a', label: '重复' }] }, '重复');
+rejects('自环', { ...DG_SPEC, edges: [{ from: 'a', to: 'a' }] }, '自己');
+rejects('没有节点', { kind: 'diagram', nodes: [] }, 'nodes');
+rejects('节点太多', {
+  kind: 'diagram',
+  nodes: Array.from({ length: 41 }, (_, i) => ({ id: `n${i}`, label: 'x' })),
+}, '40');
+rejects('role 用了没定义的值', {
+  kind: 'diagram',
+  nodes: [{ id: 'x', label: 'x', role: '重要' }],
+}, 'role');
+rejects('direction 用了没定义的值', { ...DG_SPEC, direction: 'up' }, 'direction');
+rejects('节点缺 label', { kind: 'diagram', nodes: [{ id: 'x' }] }, 'label');
+
 console.log(`\n${pass} 通过, ${fail} 失败\n`);
 if (fail) process.exit(1);

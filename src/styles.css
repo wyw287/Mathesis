@@ -1664,3 +1664,114 @@ button {
   color: var(--muted);
   font-size: 12.5px;
 }
+
+/* ------------------------------------------------------------ 流程 / 逻辑图 */
+
+.diagram {
+  padding: 10px 8px 4px;
+}
+
+.dg-svg {
+  display: block;
+}
+
+.dg-node {
+  cursor: pointer;
+}
+
+.dg-node rect {
+  fill: var(--panel);
+  stroke: var(--border-strong);
+  stroke-width: 1.4;
+}
+
+.dg-node:hover rect {
+  stroke: var(--accent);
+  stroke-width: 2;
+}
+
+/* 语义角色 —— 一张所有节点长得一样的图说不出"谁是要紧的"。
+   配色沿用 gap 那套语言,不另起一套。 */
+.dg-given rect {
+  fill: #f4f7fd;
+  stroke: #a8bde4;
+}
+
+.dg-key rect {
+  fill: var(--gap-substantive-bg);
+  stroke: var(--gap-substantive-fg);
+  stroke-width: 1.8;
+}
+
+.dg-conclusion rect {
+  fill: #f2fbf5;
+  stroke: #a8d8bd;
+}
+
+.dg-label {
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  font-size: 12.5px;
+  line-height: 1.25;
+  padding: 0 8px;
+  overflow: hidden;
+  color: var(--text);
+}
+
+.dg-edge line {
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+}
+
+.dg-edge-label {
+  font-size: 11px;
+  fill: var(--muted);
+  font-family: var(--mono);
+}
+
+.dg-note {
+  margin: 8px 12px 4px;
+  font-size: 12.5px;
+  color: var(--gap-substantive-fg);
+  background: var(--gap-substantive-bg);
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+.dg-legend {
+  display: flex;
+  gap: 14px;
+  padding: 8px 14px 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.dg-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.dg-swatch {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  display: inline-block;
+}
+
+.dg-swatch.dg-given {
+  background: #f4f7fd;
+  border-color: #a8bde4;
+}
+.dg-swatch.dg-key {
+  background: var(--gap-substantive-bg);
+  border-color: var(--gap-substantive-fg);
+}
+.dg-swatch.dg-conclusion {
+  background: #f2fbf5;
+  border-color: #a8d8bd;
+}
