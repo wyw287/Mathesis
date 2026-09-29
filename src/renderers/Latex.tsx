@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef } from 'react';
 import katex from 'katex';
+import { collapseOverEscaped } from '../lib/latex-plain';
 
 /**
  * 纯数学公式渲染。
@@ -37,15 +38,23 @@ export function Latex({ tex, display = false }: Props) {
 
   const html = useMemo(() => {
     if (!source) return null;
+    const options = { displayMode: display, throwOnError: true, strict: false, trust: false };
     try {
-      return katex.renderToString(source, {
-        displayMode: display,
-        throwOnError: true,
-        strict: false,
-        trust: false,
-      });
+      return katex.renderToString(source, options);
     } catch {
-      return null;
+      // 有些模型把反斜杠多转义了一层(`\times`)。那在 LaTeX 里是**换行符**,
+      // 渲染出来要么报错、要么变成莫名其妙的分行 —— 看起来像模型写错了公式,
+      // 其实是转义层数的问题。
+      //
+      // 判据交给 KaTeX 自己:原样不行就试折叠过的。**不猜**,因为猜错的代价是
+      // 把一个本来正确的公式改坏。
+      const collapsed = collapseOverEscaped(source);
+      if (collapsed === source) return null;
+      try {
+        return katex.renderToString(collapsed, options);
+      } catch {
+        return null;
+      }
     }
   }, [source, display]);
 

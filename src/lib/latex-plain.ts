@@ -173,8 +173,67 @@ function convert(src: string): string {
   return out.join('');
 }
 
+/**
+ * 折叠多余的转义层。
+ *
+ * 模型经常把 LaTeX 的反斜杠**多转义一层** —— 在 JSON 里写成 `\\times`,
+ * 解出来就是 `\\times`(两个反斜杠)。而 `\\` 在 LaTeX 里是**换行符**,
+ * 于是 `2\\times2` 会渲染成「2 换行 ×2」,看起来像模型写错了公式,
+ * 其实是转义层数错了。
+ *
+ * **必须在 `convert` 之前跑。** convert 会把 `\\` 当成转义字符吃掉一层,
+ * 之后再折叠就晚了 —— 那时拿到的是 `\times` 这样的半成品,分不清它原本
+ * 是一层还是两层。这个顺序错了的话,双反斜杠的输入会被折成字面量 `${name}`。
+ *
+ * 只在后面紧跟**已知命令名**时才折叠:真正的换行 `\\` 后面不会紧跟
+ * `times` 这种名字,所以不会误伤 `x \\ y` 这类合法用法。
+ */
+export function collapseOverEscaped(s: string): string {
+  // 除了符号表里的名字,还要算上 convert 能特殊处理的宏(分式、根号、\text 这些)。
+  // 漏掉它们的话,多转义一层就会绕过那些规则:比如 `\\frac{1}{2}` 折不出来,
+  // 最后变成 "frac12" 而不是 "1/2"。
+  const known = (name: string) =>
+    LATEX_SYMBOLS[name] !== undefined ||
+    LATEX_DROP.has(name) ||
+    TEX_TEXT_MACROS.has(name) ||
+    TEX_FRAC_MACROS.has(name) ||
+    name === 'sqrt' ||
+    name === 'overline' ||
+    name === 'bar';
+
+  return s.replace(/\\\\([a-zA-Z]+)/g, (whole, name: string) =>
+    known(name) ? `\\${name}` : whole,
+  );
+}
+
+/**
+ * 标题是**单行**的:落单的 `\\`(合法 LaTeX 里表示换行)在这里没有意义,
+ * 不处理的话卡片头上会挂一个反斜杠。只在标题路径上做 —— 渲染路径里
+ * `\\` 可能是矩阵的行分隔符,不能动。
+ */
+const lineBreakToSpace = (s: string): string => s.replace(/\\\\/g, ' ');
+
+/**
+ * 去掉 Markdown 标记。
+ *
+ * 标题是**纯文本**,而模型很自然地会往里写 Markdown(`**是错的**`)。
+ * 不处理的话卡片头上会挂着一串星号。
+ */
+function stripMarkdown(s: string): string {
+  return s
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/(^|[^*])\*([^*]+)\*(?!\*)/g, '$1$2')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/~~([^~]+)~~/g, '$1')
+    .replace(/^\s*#{1,6}\s+/gm, '')
+    .replace(/^\s*[-*+]\s+/gm, '');
+}
+
 export function latexToPlain(tex: string): string {
-  return convert(tex).replace(/\s+/g, ' ').trim();
+  // 顺序要紧:折叠转义层必须在 **convert 之前**。convert 会把 `\\` 当成转义
+  // 字符吃掉一层,之后再折叠就晚了 —— 拿到的是半成品,分不清原本几层。
+  const prepared = lineBreakToSpace(collapseOverEscaped(tex));
+  return stripMarkdown(convert(prepared).replace(/\s+/g, ' ').trim());
 }
 
 /** 生成人可读标题。它是上下文压缩的抓手,也是学生在对话里引用这张图的说法。 */

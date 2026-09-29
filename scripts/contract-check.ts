@@ -585,5 +585,60 @@ rejects('矩阵元素里写赋值', { kind: 'linear', matrix: [['a=1', '0'], ['0
 rejects('probe 缺 y 分量', { ...LIN_SPEC, probe: { x: '1' } }, 'probe.y');
 rejects('view 的区间反了', { ...LIN_SPEC, view: { x: [5, -5], y: [-3, 3] } }, '起 < 止');
 
+console.log('\n标题:模型多转义一层、还往里写 Markdown');
+
+{
+  // 用显式字符构造,彻底避开"反斜杠被某一层吃掉"——之前就是因为测试里的
+  // 反斜杠被 shell 吃掉了一层,双层转义那条路径**根本没被测到**,
+  // 而它当时是坏的(会吐出字面量 ${name})。
+  const BS = String.fromCharCode(92);
+
+  ok('单层转义的 \\times 拍成 ×', () => {
+    const t = titleFor(parseSpec({ kind: 'quiz', question: `2${BS}times2 矩阵` }));
+    if (!t.includes('×')) throw new Error(`没拍成乘号:${t}`);
+  });
+
+  ok('双层转义的 \\\\times 也拍成 ×', () => {
+    const t = titleFor(parseSpec({ kind: 'quiz', question: `2${BS}${BS}times2 矩阵` }));
+    if (!t.includes('×')) throw new Error(`双层没折叠:${t}`);
+    if (t.includes(BS)) throw new Error(`还有反斜杠:${t}`);
+  });
+
+  ok('双层转义不会吐出字面量 ${...}', () => {
+    // 这是修复前的实际症状,而且比"没转换"更糟 —— 卡片头上会挂一串模板语法
+    const t = titleFor(parseSpec({ kind: 'quiz', question: `${BS}${BS}times` }));
+    if (t.includes('${')) throw new Error(`吐出了模板字面量:${t}`);
+  });
+
+  ok('双层转义的分式也能拍平', () => {
+    const t = titleFor(parseSpec({ kind: 'quiz', question: `${BS}${BS}frac{1}{2} 的取值` }));
+    if (!t.includes('1/2')) throw new Error(`分式没拍平:${t}`);
+  });
+
+  ok('合法的换行 \\\\ 变成空格,不留反斜杠', () => {
+    // 标题是单行的,换行没有意义。留着的话卡片头上会挂一个反斜杠。
+    const t = titleFor(parseSpec({ kind: 'quiz', question: `第一行 ${BS}${BS} 第二行` }));
+    if (t.includes(BS)) throw new Error(`留了反斜杠:${t}`);
+    if (!t.includes('第一行') || !t.includes('第二行')) throw new Error(`内容丢了:${t}`);
+  });
+
+  ok('标题里的 Markdown 标记被去掉', () => {
+    const t = titleFor(parseSpec({ kind: 'quiz', question: '下面哪一条**是错的**?' }));
+    if (t.includes('*')) throw new Error(`星号还在:${t}`);
+    if (!t.includes('是错的')) throw new Error(`内容丢了:${t}`);
+  });
+
+  ok('推导标题里的斜体标记也去掉', () => {
+    const t = titleFor(
+      parseSpec({
+        kind: 'derivation',
+        statement: `设 ${BS}epsilon > 0 是*任意*给定的`,
+        steps: [{ id: 'a', latex: '1', reason: 'r' }],
+      }),
+    );
+    if (t.includes('*')) throw new Error(`星号还在:${t}`);
+  });
+}
+
 console.log(`\n${pass} 通过, ${fail} 失败\n`);
 if (fail) process.exit(1);
