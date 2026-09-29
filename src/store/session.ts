@@ -6,8 +6,10 @@ import {
   type CanvasArtifact,
   type CanvasEvent,
   CURRENT_SCHEMA_VERSION,
+  migrateArtifact,
   toIndexEntry,
 } from '../types/artifact';
+import { titleFor } from '../tools/specs';
 
 export interface Settings {
   baseUrl: string;
@@ -81,6 +83,23 @@ const DEFAULT_SETTINGS: Settings = {
   toolsEnabled: true,
 };
 
+/**
+ * title 是 spec 的**派生数据**,但按契约它又是 artifact 的持久字段
+ * (它是发给模型的画布目录里唯一的内容标识)。
+ *
+ * 只存不算的后果有两个,都真实发生过:
+ *  · 改了 titleFor 的生成逻辑后,旧 artifact 永远停在旧标题上
+ *  · AI 用 edit_artifact 改了内容,标题不跟着变,目录里写的是过期描述
+ *
+ * 所以凡是 spec 变动的地方(载入、patch)都重算一次。
+ * 纯函数、开销可忽略,不值得为它维护增量更新。
+ */
+export function refreshArtifact(a: CanvasArtifact): CanvasArtifact {
+  const migrated = migrateArtifact(a);
+  const title = titleFor(migrated.spec);
+  return title === migrated.title ? migrated : { ...migrated, title };
+}
+
 export const useSession = create<SessionState>()(
   persist(
     (set, get) => ({
@@ -116,17 +135,12 @@ export const useSession = create<SessionState>()(
 
       patchArtifact: (id, patch) =>
         set((s) => ({
-          artifacts: s.artifacts.map((a) =>
-            a.id === id
-              ? {
-                  ...a,
-                  // 浅合并:数组整体替换。深合并对 curves 这类数组语义不明确。
-                  spec: { ...a.spec, ...patch } as ArtifactSpec,
-                  rev: a.rev + 1,
-                  updatedAt: Date.now(),
-                }
-              : a,
-          ),
+          artifacts: s.artifacts.map((a) => {
+            if (a.id !== id) return a;
+            // 浅合并:数组整体替换。深合并对 curves 这类数组语义不明确。
+            const spec = { ...a.spec, ...patch } as ArtifactSpec;
+            return { ...a, spec, title: titleFor(spec), rev: a.rev + 1, updatedAt: Date.now() };
+          }),
         })),
 
       removeArtifact: (id) =>
@@ -186,6 +200,25 @@ export const useSession = create<SessionState>()(
         runtime: s.runtime,
         messages: s.messages,
       }),
+      // 载入时重算标题并跑 schema 迁移。
+      // 这两件事只能在这里做 —— 它们是用来覆盖「旧版本代码存下来的数据」的,
+      // 而这里,是唯一能拿到那批数据的地方。
+      merge: (persisted, current) => {
+        const p = (persisted ?? {}) as Partial<SessionState>;
+        return {
+          ...current, // 动作函数必须来自 current,不能被持久化数据盖掉
+          settings: { ...current.settings, ...(p.settings ?? {}) },
+          artifacts: (p.artifacts ?? []).map(refreshArtifact),
+          runtime: p.runtime ?? {},
+          messages: p.messages ?? [],
+          // 易失字段一律取初值,不接受任何残留
+          apiHistory: [],
+          pendingEvents: [],
+          busy: false,
+          status: null,
+          focusId: undefined,
+        };
+      },
     },
   ),
 );

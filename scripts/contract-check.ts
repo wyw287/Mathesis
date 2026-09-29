@@ -10,13 +10,22 @@
 import { parseSpec, titleFor } from '../src/tools/specs';
 import { extractArtifactBlocks, stripArtifactBlocks } from '../src/llm/fallback';
 import { ToolInputError } from '../src/tools/validate';
+import { CURRENT_SCHEMA_VERSION, type CanvasArtifact } from '../src/types/artifact';
+import { refreshArtifact } from '../src/store/session';
 
 let pass = 0;
 let fail = 0;
 
-function ok(name: string, fn: () => void) {
+/**
+ * 同时接受回调和布尔值。
+ *
+ * 这份脚本原本只收回调,而另外两份检查脚本收布尔值 —— 签名不一致本身就埋了个坑:
+ * 传布尔值进来会被当成 `fn()` 调用而抛「不是函数」,所有断言全红但原因看不出来。
+ */
+function ok(name: string, check: (() => void) | boolean, detail?: unknown) {
   try {
-    fn();
+    if (typeof check === 'function') check();
+    else if (!check) throw new Error(detail === undefined ? '断言为假' : String(detail));
     pass++;
     console.log(`  ✓ ${name}`);
   } catch (e) {
@@ -147,6 +156,83 @@ ok('标题过长时截断', () => {
     curves: [{ type: 'explicit', expr: 'x', label: '一'.repeat(80) }],
   });
   if (titleFor(s).length > 43) throw new Error(`没截断:${titleFor(s).length} 字`);
+});
+
+console.log('\n标题拍平 —— 标题既要给人看,也要每轮进模型的上下文');
+ok('命题里的 LaTeX 被拍成可读文本', () => {
+  const t = titleFor(
+    parseSpec({
+      kind: 'derivation',
+      statement: String.raw`\lim_{x\to 0}\sin\frac{1}{x}\ \text{不存在}`,
+      steps: [{ id: 'a', latex: '1', reason: 'r' }],
+    }),
+  );
+  if (t.includes('\\')) throw new Error(`还有反斜杠：${t}`);
+  if (!t.includes('不存在')) throw new Error(`丢了 \text{} 里的中文：${t}`);
+  if (!t.includes('lim')) throw new Error(`丢了 lim：${t}`);
+  if (!t.includes('→')) throw new Error(`\\to 没拍成箭头：${t}`);
+  if (!t.includes('1/x')) throw new Error(`分数没拍成 a/b：${t}`);
+  if (t.includes('{') || t.includes('}')) throw new Error(`还有花括号：${t}`);
+});
+ok('集合写法被拍平', () => {
+  const t = titleFor(
+    parseSpec({
+      kind: 'derivation',
+      statement: String.raw`\mathbb{R}\setminus\{0\}`,
+      steps: [{ id: 'a', latex: '1', reason: 'r' }],
+    }),
+  );
+  // \mathbb{R} → R,\setminus → \,转义的 \{ \} 是字面花括号所以要保留。
+  // 断言不能写成「不含反斜杠」—— \setminus 拍成 \ 正是正确结果。
+  if (t !== '推导：R\\{0}') throw new Error(`得到 "${t}"`);
+});
+ok('测验标题不含美元符号', () => {
+  const t = titleFor(parseSpec({ kind: 'quiz', question: String.raw`$\lim_{x\to 0}f(x)$ 存在吗?` }));
+  if (t.includes('$')) throw new Error(`还有美元符号：${t}`);
+});
+ok('plot2d 标题不受影响', () => {
+  // mathjs 表达式里没有反斜杠,拍平函数不该动它
+  const t = titleFor(
+    parseSpec({ kind: 'plot2d', view: { x: [0, 1] }, curves: [{ type: 'explicit', expr: 'sin(1/x)' }] }),
+  );
+  if (t !== 'y = sin(1/x)') throw new Error(`得到 "${t}"`);
+});
+
+console.log('\n标题是派生数据 —— 载入时必须重算');
+ok('旧的原始 LaTeX 标题在载入时被拍平', () => {
+  const stale: CanvasArtifact = {
+    id: 'x1',
+    spec: {
+      kind: 'derivation',
+      statement: String.raw`\lim_{x\to 0}\sin\frac{1}{x}\ \text{不存在}`,
+      steps: [{ id: 'a', latex: '1', reason: 'r' }],
+    },
+    rev: 1,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    origin: 'ai',
+    // 旧版本代码存下来的标题,长这样
+    title: String.raw`推导：\lim_{x\to 0}\sin\frac{1}{x}\ \text{不存`,
+    createdAt: 0,
+    updatedAt: 0,
+    refs: [],
+  };
+  const fresh = refreshArtifact(stale);
+  if (fresh.title.includes('\\')) throw new Error(`旧标题没被重算：${fresh.title}`);
+  if (!fresh.title.includes('不存在')) throw new Error(`重算结果丢了内容：${fresh.title}`);
+});
+ok('标题已经正确时不改动对象', () => {
+  const a: CanvasArtifact = {
+    id: 'x2',
+    spec: { kind: 'quiz', question: '这个极限存在吗?' },
+    rev: 1,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    origin: 'ai',
+    title: '测验：这个极限存在吗?',
+    createdAt: 0,
+    updatedAt: 0,
+    refs: [],
+  };
+  if (refreshArtifact(a) !== a) throw new Error('无谓地新建了对象,会让 React 多渲染一轮');
 });
 
 console.log('\n降级路径:从文本里抠 spec');
