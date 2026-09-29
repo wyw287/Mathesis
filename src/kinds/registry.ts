@@ -22,6 +22,7 @@ import { plot2dModule } from './plot2d';
 import { derivationModule } from './derivation';
 import { quizModule } from './quiz';
 import { htmlModule } from './html';
+import { counterexampleModule } from './counterexample';
 
 /**
  * 全部已注册的 artifact 类型。**新增 kind 就在这里加一行。**
@@ -29,7 +30,13 @@ import { htmlModule } from './html';
  * 刻意不加类型标注:加 `as const` 才能让下面那种 `(typeof KIND_MODULES)[number]['kind']`
  * 拿到字面量联合,而那个联合正是完整性断言和工具组装依赖的东西。
  */
-export const KIND_MODULES = [plot2dModule, derivationModule, quizModule, htmlModule] as const;
+export const KIND_MODULES = [
+  plot2dModule,
+  derivationModule,
+  quizModule,
+  counterexampleModule,
+  htmlModule,
+] as const;
 
 type RegisteredKind = (typeof KIND_MODULES)[number]['kind'];
 

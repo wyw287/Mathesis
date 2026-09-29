@@ -1304,3 +1304,118 @@ button {
   padding: 1px 7px;
   cursor: help;
 }
+
+/* ------------------------------------------------------------ 反例工作台 */
+
+.ce-claim {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 14px 4px;
+}
+
+.ce-claim-tag {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--gap-unjustified-fg);
+  background: var(--gap-unjustified-bg);
+  border-radius: 5px;
+  padding: 1px 7px;
+}
+
+.ce-checks {
+  padding: 4px 14px 10px;
+}
+
+.ce-group {
+  font-size: 12px;
+  color: var(--faint);
+  margin: 10px 0 5px;
+}
+
+.ce-check {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 4px 8px;
+  border-radius: 6px;
+  border-left: 3px solid transparent;
+  font-size: 13.5px;
+}
+
+.ce-check.pass {
+  background: #f2fbf5;
+  border-left-color: #1a7f4b;
+}
+
+.ce-check.fail {
+  background: #fdf7f6;
+  border-left-color: var(--border-strong);
+  color: var(--muted);
+}
+
+/* 「模型声称、系统验不了」必须是第三种样子 —— 混进对勾里就等于给了
+   一个假的确定性,那比不做检查更糟。 */
+.ce-check.asserted {
+  background: var(--gap-substantive-bg);
+  border-left-color: var(--gap-substantive-fg);
+}
+
+.ce-mark {
+  flex: none;
+  font-family: var(--mono);
+  width: 14px;
+  text-align: center;
+}
+
+.ce-check.pass .ce-mark {
+  color: #1a7f4b;
+}
+.ce-check.fail .ce-mark {
+  color: var(--faint);
+}
+.ce-check.asserted .ce-mark {
+  color: var(--gap-substantive-fg);
+}
+
+.ce-label {
+  flex: 1;
+}
+
+.ce-detail {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--faint);
+}
+
+.ce-verdict {
+  margin: 0 14px 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 13.5px;
+}
+
+.ce-verdict.found {
+  background: #f2fbf5;
+  border-color: #a8d8bd;
+}
+
+.ce-verdict-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ce-caveat {
+  margin-top: 6px;
+  font-size: 12.5px;
+  color: var(--gap-substantive-fg);
+}
+
+.ce-confirm {
+  margin-top: 10px;
+}

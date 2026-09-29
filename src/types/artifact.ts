@@ -102,7 +102,73 @@ export interface HtmlSpec {
   capabilities?: string[];
 }
 
-export type ArtifactSpec = Plot2DSpec | DerivationSpec | QuizSpec | HtmlSpec;
+// ---------------------------------------------------------------- 反例工作台
+
+/**
+ * 一条条件检查。
+ *
+ * 三种可信度是刻意分开的,用意和 `derivation` 的 `gap` 完全一样:
+ * **让学生看得出哪一条是算出来的、哪一条只是模型说的。**
+ *
+ * 有些前提在数值上根本验不了 —— 连续、可导、一致收敛都属于这类。
+ * 把它们和算出来的混在一起显示成同样的对勾,等于让学生以为"系统验过了"。
+ * 那比不做检查更糟:它给了一个假的确定性。
+ */
+export type CounterexampleCheck =
+  | {
+      id: string;
+      /** 给人看的一句话,可含 LaTeX */
+      label: string;
+      /** 在参数上求值再比对 —— 算出来的 */
+      kind: 'numeric';
+      /** 可引用 params 里的参数名 */
+      expr: string;
+      op: 'eq' | 'ne' | 'gt' | 'lt' | 'ge' | 'le';
+      value: number;
+      /** op 为 eq/ne 时的容差,默认 1e-6 */
+      tol?: number;
+    }
+  | {
+      id: string;
+      label: string;
+      /** 采样判性质 —— 采样验的。采样证明不了普适命题,所以这一类叫"采样",不叫"验证" */
+      kind: 'sampled';
+      expr: string;
+      property: 'positive' | 'negative' | 'signChanges' | 'increasing' | 'decreasing';
+      over: [number, number];
+    }
+  | {
+      id: string;
+      label: string;
+      /** 模型声称成立,我们验不了。必须如实显示成"未验证",不能混进对勾里 */
+      kind: 'asserted';
+    };
+
+/**
+ * 反例工作台。
+ *
+ * 一个反例 = 满足命题**全部前提**、但让**结论不成立**的对象。
+ * 学生的任务就是在参数空间里找到这样的一个点。
+ *
+ * `plot` 直接复用 Plot2DSpec —— 候选反例本来就是要画出来的函数,
+ * 而 plot2d 已经有参数、曲线、点、标注这一整套。所以这个 kind 的渲染
+ * 基本是"现有的 Plot2D + 一块条件面板",不需要新的绘图代码。
+ */
+export interface CounterexampleSpec {
+  kind: 'counterexample';
+  /** 要反驳的命题(LaTeX) */
+  claim: string;
+  /** 候选对象。它的 params 就是工作台的滑块,检查项引用同一套参数名。 */
+  plot: Plot2DSpec;
+  /** 反例必须满足的前提 */
+  hypotheses: CounterexampleCheck[];
+  /** 反例必须让它不成立的那条结论(写成"结论不成立"的形式) */
+  conclusion: CounterexampleCheck;
+  /** 全部通过时的一句话,告诉学生他找到了什么 */
+  found?: string;
+}
+
+export type ArtifactSpec = Plot2DSpec | DerivationSpec | QuizSpec | HtmlSpec | CounterexampleSpec;
 export type ArtifactKind = ArtifactSpec['kind'];
 
 // ---------------------------------------------------------------- Artifact

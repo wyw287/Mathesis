@@ -29,7 +29,13 @@ import { Plot2D } from './Plot2D';
 
 const DASHES = ['solid', 'dashed', 'dotted'] as const;
 
-function expr(v: unknown, where: string): string {
+/**
+ * 表达式校验:既查安全性(无赋值/多语句),也查可解析性 —— 解析不了的式子早点报出来。
+ *
+ * 导出是为了让别的 kind 复用同一套规则(反例工作台的条件检查项也是可求值表达式)。
+ * 各写一份的话,两边迟早会对"什么算合法表达式"产生分歧。
+ */
+export function parseExpr(v: unknown, where: string): string {
   const s = str(v, where);
   try {
     compileExpr(s);
@@ -60,7 +66,7 @@ function parseCurve(v: unknown, where: string): Curve {
     case 'explicit':
       return {
         type,
-        expr: expr(o.expr, `${where}.expr`),
+        expr: parseExpr(o.expr, `${where}.expr`),
         domain: o.domain === undefined ? undefined : pair(o.domain, `${where}.domain`),
         label: optStr(o.label, `${where}.label`),
         style: parseStyle(o.style, `${where}.style`),
@@ -68,8 +74,8 @@ function parseCurve(v: unknown, where: string): Curve {
     case 'parametric':
       return {
         type,
-        x: expr(o.x, `${where}.x`),
-        y: expr(o.y, `${where}.y`),
+        x: parseExpr(o.x, `${where}.x`),
+        y: parseExpr(o.y, `${where}.y`),
         t: pair(o.t, `${where}.t`),
         label: optStr(o.label, `${where}.label`),
         style: parseStyle(o.style, `${where}.style`),
@@ -77,7 +83,7 @@ function parseCurve(v: unknown, where: string): Curve {
     case 'sequence':
       return {
         type,
-        expr: expr(o.expr, `${where}.expr`),
+        expr: parseExpr(o.expr, `${where}.expr`),
         n: pair(o.n, `${where}.n`),
         label: optStr(o.label, `${where}.label`),
         style: parseStyle(o.style, `${where}.style`),
@@ -127,7 +133,7 @@ export function parsePlot2DSpec(v: unknown): Plot2DSpec {
 function exprPair(v: unknown, where: string): [string, string] {
   const a = arr(v, where);
   if (a.length !== 2) throw new ToolInputError(`${where} 必须是恰好两个表达式的数组 [x, y]`);
-  return [expr(a[0], `${where}[0]`), expr(a[1], `${where}[1]`)];
+  return [parseExpr(a[0], `${where}[0]`), parseExpr(a[1], `${where}[1]`)];
 }
 
 function parsePoint(v: unknown, where: string): PlotPoint {
@@ -164,7 +170,11 @@ const RANGE = (what: string) => ({
 });
 
 /** 画布目录的文本形式。查找失败时附在错误里,让模型能自己纠正 id。 */
-const tool: TeachingTool = {
+/**
+ * 导出是为了让「反例工作台」复用同一份参数 schema。
+ * 抄一份的话,plot2d 加字段时反例那条路会静默落后。
+ */
+export const plot2dTool: TeachingTool = {
   name: 'plot2d',
   description:
     '在画布上画一张二维图。这是最常用的工具 —— 任何能用图说清楚的东西都用它,不要用文字描述图像。\n' +
@@ -312,5 +322,5 @@ export const plot2dModule: KindModule<Plot2DSpec> = {
   parse: parsePlot2DSpec,
   title,
   Body,
-  tool,
+  tool: plot2dTool,
 };

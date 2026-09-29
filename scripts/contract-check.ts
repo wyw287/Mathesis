@@ -8,6 +8,7 @@
  * 运行:npm run check
  */
 import { parseSpec, titleFor, reconcileArtifacts } from '../src/kinds/registry';
+import { evaluateAll } from '../src/kinds/counterexample/checks';
 import { extractArtifactBlocks, stripArtifactBlocks } from '../src/llm/fallback';
 import { ToolInputError } from '../src/lib/validate';
 import { CURRENT_SCHEMA_VERSION, type CanvasArtifact } from '../src/types/artifact';
@@ -251,6 +252,115 @@ ok('去掉块后正文仍然完整', () => {
   const text = '前\n\n```artifact\n{"kind":"quiz","question":"q"}\n```\n\n后';
   const cleaned = stripArtifactBlocks(text);
   if (!cleaned.includes('前') || !cleaned.includes('后')) throw new Error(`正文被吃掉了:"${cleaned}"`);
+});
+
+
+console.log('\n反例工作台 —— 解析');
+const CE_SPEC = {
+  kind: 'counterexample',
+  claim: "f'(0)=0 \Rightarrow 0 \text{ 是极值}",
+  plot: {
+    view: { x: [-2, 2] },
+    curves: [{ type: 'explicit', expr: 'x^3 + a*x' }],
+    params: [{ name: 'a', value: 1, min: -2, max: 2 }],
+  },
+  hypotheses: [{ id: 'h1', label: "f'(0) = 0", kind: 'numeric', expr: 'a', op: 'eq', value: 0 }],
+  conclusion: { id: 'c1', label: '0 不是极值', kind: 'sampled', expr: 'x^3', property: 'signChanges', over: [-1, 1] },
+};
+
+ok('能解析出一个反例工作台', () => {
+  const s = parseSpec(CE_SPEC) as any;
+  if (s.kind !== 'counterexample') throw new Error('kind 错了');
+  if (s.plot.kind !== 'plot2d') throw new Error('嵌套的 plot 没被补上 kind');
+  if (s.hypotheses.length !== 1) throw new Error('前提数量不对');
+});
+ok('三种可信度都能表达', () => {
+  const s = parseSpec({
+    ...CE_SPEC,
+    hypotheses: [
+      { id: 'a', label: '处处连续', kind: 'asserted' },
+      { id: 'b', label: 'f(0)=0', kind: 'numeric', expr: 'a*0', op: 'eq', value: 0 },
+      { id: 'c', label: '恒正', kind: 'sampled', expr: 'x^2+1', property: 'positive', over: [-1, 1] },
+    ],
+  }) as any;
+  if (s.hypotheses[0].kind !== 'asserted') throw new Error('asserted 没保留');
+});
+ok('嵌套 plot 的报错路径指向 spec.plot', () => {
+  try {
+    parseSpec({ ...CE_SPEC, plot: { view: { x: [5, -5] }, curves: [{ type: 'explicit', expr: 'x' }] } });
+  } catch (e) {
+    const m = (e as Error).message;
+    if (!m.includes('spec.plot.view')) throw new Error('路径没改对:' + m);
+    return;
+  }
+  throw new Error('本该被拒绝');
+});
+rejects('缺前提', { ...CE_SPEC, hypotheses: [] }, 'hypotheses');
+rejects('检查项 id 重复', { ...CE_SPEC, hypotheses: [{ ...CE_SPEC.hypotheses[0], id: 'c1' }] }, '');
+rejects('不认识的采样性质', {
+  ...CE_SPEC,
+  conclusion: { id: 'c1', label: 'x', kind: 'sampled', expr: 'x', property: 'nope', over: [-1, 1] },
+}, 'property');
+
+console.log('\n反例工作台 —— 求值');
+
+ok('前提不满足时不算反例', () => {
+  const { verdict } = evaluateAll(parseSpec(CE_SPEC) as any, { a: 1 });
+  if (verdict.found) throw new Error("a=1 时 f'(0)≠0,不该判成反例");
+  if (verdict.hypothesesOk) throw new Error('前提应该是不满足的');
+});
+ok('参数满足时判成找到了反例', () => {
+  const { verdict } = evaluateAll(parseSpec(CE_SPEC) as any, { a: 0 });
+  if (!verdict.found) throw new Error('a=0 就是反例,应该判成立');
+});
+ok('asserted 既不算通过也不算失败,而且被单独计数', () => {
+  const spec = parseSpec({
+    ...CE_SPEC,
+    hypotheses: [
+      { id: 'h1', label: '处处连续', kind: 'asserted' },
+      { id: 'h2', label: "f'(0)=0", kind: 'numeric', expr: 'a', op: 'eq', value: 0 },
+    ],
+  }) as any;
+  const { hypotheses, verdict } = evaluateAll(spec, { a: 0 });
+  if (hypotheses[0].status !== 'asserted') throw new Error('asserted 被算成了 ' + hypotheses[0].status);
+  if (verdict.assertedCount !== 1) throw new Error('没数出来:' + verdict.assertedCount);
+  if (!verdict.found) throw new Error('asserted 应当算作满足,否则任何反例都无法成立');
+});
+ok('六种数值比较都对', () => {
+  const cases: [string, number, boolean][] = [
+    ['eq', 2, true], ['eq', 3, false], ['ne', 3, true], ['ne', 2, false],
+    ['gt', 1, true], ['lt', 3, true], ['ge', 2, true], ['le', 2, true],
+  ];
+  for (const [op, value, want] of cases) {
+    const spec = parseSpec({ ...CE_SPEC, hypotheses: [{ id: 'h', label: 'x', kind: 'numeric', expr: 'a', op, value }] }) as any;
+    const { hypotheses } = evaluateAll(spec, { a: 2 });
+    if ((hypotheses[0].status === 'pass') !== want) {
+      throw new Error(op + ' ' + value + ' 应' + (want ? '' : '不') + '通过,得到 ' + hypotheses[0].status);
+    }
+  }
+});
+ok('采样判性质:恒正 / 变号 / 单调', () => {
+  const mk = (expr: string, property: string, over: number[]) =>
+    evaluateAll(
+      parseSpec({ ...CE_SPEC, hypotheses: [{ id: 'h', label: 'x', kind: 'sampled', expr, property, over }] }) as any,
+      { a: 0 },
+    ).hypotheses[0].status;
+  if (mk('x^2+1', 'positive', [-1, 1]) !== 'pass') throw new Error('x²+1 在 [-1,1] 上应当恒正');
+  if (mk('x^2-1', 'positive', [-1, 1]) !== 'fail') throw new Error('x²-1 不恒正');
+  if (mk('x', 'signChanges', [-1, 1]) !== 'pass') throw new Error('x 在 [-1,1] 上变号');
+  if (mk('x^2', 'signChanges', [-1, 1]) !== 'fail') throw new Error('x² 不变号');
+  if (mk('x', 'increasing', [-1, 1]) !== 'pass') throw new Error('x 单调增');
+  if (mk('x^2', 'increasing', [-1, 1]) !== 'fail') throw new Error('x² 在 [-1,1] 上不单调');
+});
+ok('采不到点时不当作通过', () => {
+  const { hypotheses } = evaluateAll(
+    parseSpec({
+      ...CE_SPEC,
+      hypotheses: [{ id: 'h', label: 'x', kind: 'sampled', expr: 'sqrt(-1-x^2)', property: 'positive', over: [0, 1] }],
+    }) as any,
+    { a: 0 },
+  );
+  if (hypotheses[0].status !== 'fail') throw new Error('应当判失败,得到 ' + hypotheses[0].status);
 });
 
 console.log(`\n${pass} 通过, ${fail} 失败\n`);
