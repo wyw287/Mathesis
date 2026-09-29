@@ -33,6 +33,16 @@ export function MathBlock({ tex }: { tex: string }) {
   return tex.includes('$') ? <Markdown source={tex} /> : <Latex tex={tex} display />;
 }
 
+/**
+ * 一行文字,可能是散文夹公式(带 `$`),也可能整句就是 LaTeX(不带 `$`)。
+ *
+ * 模型写标签和说明时两种都用:有时写 `f 在 0 处可导`,有时直接写 `f'(0)=0`。
+ * 只认一种就会把另一种原样打印出来。
+ */
+export function MathText({ text }: { text: string }) {
+  return text.includes('$') ? <Markdown source={text} /> : <Latex tex={text} />;
+}
+
 // ------------------------------------------------------------------ 行内
 
 function inline(text: string, keyBase = 'i'): ReactNode[] {

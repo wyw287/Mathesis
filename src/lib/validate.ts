@@ -89,3 +89,25 @@ export function describe(v: unknown): string {
   if (t === 'number' || t === 'boolean') return `${t} ${String(v)}`;
   return t;
 }
+
+/**
+ * 把一个校验器的报错路径改写成嵌套之后的真实路径。
+ *
+ * 复用一个 kind 的校验器时(反例嵌 plot2d、对比嵌 plot2d 和 derivation),
+ * 它的内部路径全是 `spec.xxx`,而实际位置是 `spec.plot.xxx` 或 `spec.items[0].spec.xxx`。
+ *
+ * **这些错误会原样回给模型让它自我修正** —— 路径指错地方它就改错地方,
+ * 所以这个改写不是美化,是正确性的一部分。
+ */
+export function relabelSpecPaths<T>(fn: (v: unknown) => T, outer: string): (v: unknown) => T {
+  return (v: unknown): T => {
+    try {
+      return fn(v);
+    } catch (e) {
+      if (e instanceof ToolInputError) {
+        throw new ToolInputError(e.message.replace(/\bspec\./g, `${outer}.`));
+      }
+      throw e;
+    }
+  };
+}

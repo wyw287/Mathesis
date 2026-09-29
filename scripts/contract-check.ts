@@ -363,5 +363,65 @@ ok('采不到点时不当作通过', () => {
   if (hypotheses[0].status !== 'fail') throw new Error('应当判失败,得到 ' + hypotheses[0].status);
 });
 
+console.log('\n并排对比 —— 解析');
+
+const CMP_SPEC = {
+  kind: 'compare',
+  items: [
+    { label: 'f(x)', spec: { kind: 'plot2d', view: { x: [-2, 2] }, curves: [{ type: 'explicit', expr: 'x^3' }] } },
+    { label: "f'(x)", spec: { kind: 'plot2d', view: { x: [-2, 2] }, curves: [{ type: 'explicit', expr: '3*x^2' }] } },
+  ],
+  note: 'f 的极值点恰好是 f′ 的零点',
+};
+
+ok('能解析出两格对比', () => {
+  const s = parseSpec(CMP_SPEC);
+  if (s.kind !== 'compare') throw new Error('kind 错了');
+  if (s.items.length !== 2) throw new Error('格数不对');
+  if (s.items[0].spec.kind !== 'plot2d') throw new Error('嵌的 plot 没被补上 kind');
+  if (s.items[0].label !== 'f(x)') throw new Error('标签丢了');
+});
+ok('三格也可以', () => {
+  const s = parseSpec({
+    ...CMP_SPEC,
+    items: [...CMP_SPEC.items, { label: 'f″(x)', spec: { kind: 'plot2d', view: { x: [-2, 2] }, curves: [{ type: 'explicit', expr: '6*x' }] } }],
+  });
+  if (s.kind !== 'compare' || s.items.length !== 3) throw new Error('三格没通过');
+});
+ok('格子里也能放推导', () => {
+  const s = parseSpec({
+    ...CMP_SPEC,
+    items: [
+      CMP_SPEC.items[0],
+      { label: '推导', spec: { kind: 'derivation', steps: [{ id: 'a', latex: '1=1', reason: '显然' }] } },
+    ],
+  });
+  if (s.kind !== 'compare' || s.items[1].spec.kind !== 'derivation') throw new Error('推导没被解析');
+});
+ok('嵌套报错路径指向具体是哪一格', () => {
+  // 这些错误会回给模型让它自我修正,只写 spec.view 的话它不知道改哪一格
+  try {
+    parseSpec({ ...CMP_SPEC, items: [CMP_SPEC.items[0], { label: 'x', spec: { kind: 'plot2d', view: { x: [5, -5] }, curves: [{ type: 'explicit', expr: 'x' }] } }] });
+  } catch (e) {
+    const m = (e as Error).message;
+    if (!m.includes('spec.items[1].spec.view')) throw new Error('路径没改对:' + m);
+    return;
+  }
+  throw new Error('本该被拒绝');
+});
+rejects('只有一格', { ...CMP_SPEC, items: [CMP_SPEC.items[0]] }, '至少');
+rejects('四格', {
+  ...CMP_SPEC,
+  items: [1, 2, 3, 4].map((i) => ({ label: `g${i}`, spec: { kind: 'plot2d', view: { x: [0, 1] }, curves: [{ type: 'explicit', expr: 'x' }] } })),
+}, '最多');
+rejects('格子里放不支持的类型', {
+  ...CMP_SPEC,
+  items: [CMP_SPEC.items[0], { label: '测验', spec: { kind: 'quiz', question: '?' } }],
+}, 'kind');
+rejects('格子缺 label', {
+  ...CMP_SPEC,
+  items: [CMP_SPEC.items[0], { spec: CMP_SPEC.items[1].spec }],
+}, 'label');
+
 console.log(`\n${pass} 通过, ${fail} 失败\n`);
 if (fail) process.exit(1);

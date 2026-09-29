@@ -191,8 +191,50 @@ export interface CounterexampleSpec {
   found?: string;
 }
 
-export type ArtifactSpec = Plot2DSpec | DerivationSpec | QuizSpec | HtmlSpec | CounterexampleSpec;
+export type ArtifactSpec =
+  | Plot2DSpec
+  | DerivationSpec
+  | QuizSpec
+  | HtmlSpec
+  | CounterexampleSpec
+  | CompareSpec;
 export type ArtifactKind = ArtifactSpec['kind'];
+
+// ---------------------------------------------------------------- 并排对比
+
+/** 对比里的一格。 */
+export interface CompareItem {
+  /** 这一格的标题,例如 "f(x)" / "f'(x)" / "a = 0 的反例" */
+  label: string;
+  /** 只允许这两种 —— 能并排看的就是"图"和"推导"。 */
+  spec: Plot2DSpec | DerivationSpec;
+}
+
+/**
+ * 并排对比。
+ *
+ * 正例 vs 反例、f vs f′、两个反例对照 —— 教学效果最强的单项往往是"放在一起看"。
+ *
+ * **两边共享一套参数。** 拖一个滑块两边同时变,这正是对比最有用的形态:
+ * 同一个 a 对两个函数各有什么影响,一眼就能看出来。各自独立反而丢掉了这个。
+ *
+ * 形态上和 counterexample 一样是**组合**:嵌进去的 spec 由它们各自的解析器和
+ * 渲染器处理,这个 kind 只负责布局和那句要点。
+ */
+export interface CompareSpec {
+  kind: 'compare';
+  /** 恰好 2 或 3 格。再多就挤得看不清了。 */
+  items: CompareItem[];
+  /** 正在讨论的命题或问题,可选 */
+  claim?: string;
+  /**
+   * 要学生注意的那个对比点。
+   *
+   * **这句话才是对比的意义所在。** 没有它,并排只是两张图 —— 学生不会自己
+   * 知道该看哪里。
+   */
+  note?: string;
+}
 
 // ---------------------------------------------------------------- Artifact
 

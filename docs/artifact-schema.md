@@ -182,6 +182,33 @@ interface CounterexampleSpec {
 
 这和 §3.2 的 `gap` 是同一个思路:**让"我验过"和"我说是"分得开。**
 
+### 3.5 compare
+
+并排对比。正例 vs 反例、f vs f′、同一函数在不同参数下的样子。
+
+```ts
+interface CompareSpec {
+  kind: 'compare';
+  items: CompareItem[];   // 恰好 2 或 3 格
+  claim?: string;         // 正在讨论的命题
+  note?: string;          // 要学生注意的对比点 —— 这句话才是对比的意义
+  // CompareItem = { label: string; spec: Plot2DSpec | DerivationSpec }
+}
+```
+
+**两边共享一套参数。** 各格用同一个 `artifactId`,于是天然共用一份参数作用域:
+拖一个滑块两边同时变。这正是对比最有用的形态 —— 同一个 `a` 对两个函数各有什么
+影响,一眼就能看出来。各自独立反而丢掉了这个。
+
+`note` 在工具 schema 里是必填的。没有它,并排只是两张图 —— **学生不会自己知道
+该看哪里**。这一条不做成硬校验(模型偶尔会漏),但渲染时放在图**上面**:
+它是"请留意哪里"的提示,不是看完之后的结论。
+
+能并排的对象是**显式枚举**的(`plot2d` 和 `derivation`),不是任意 kind。
+这不需要注册表 —— 直接 import 那两个 kind 的解析器和渲染器即可,也就避开了
+`compare → registry → compare` 的环。枚举本身也是好事:"什么适合并排看"
+本来就有答案。
+
 ---
 
 ## 4. 表达力分层:Tier 1 与 Tier 2

@@ -1419,3 +1419,60 @@ button {
 .ce-confirm {
   margin-top: 10px;
 }
+
+/* ------------------------------------------------------------ 并排对比 */
+
+.cmp {
+  padding: 12px 14px 14px;
+}
+
+.cmp-claim {
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+
+.cmp-note {
+  font-size: 13.5px;
+  color: var(--text);
+  background: var(--accent-soft);
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  padding: 7px 11px;
+  margin-bottom: 12px;
+}
+
+.cmp-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.cmp-cell {
+  /* flex-basis 0 让两格等宽;三格时各自约 1/3。
+     min-width 保证再挤也不会小到看不清。 */
+  flex: 1 1 0;
+  min-width: 250px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  overflow: hidden;
+  background: var(--panel);
+}
+
+.cmp-label {
+  font-size: 12.5px;
+  color: var(--muted);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  background: #fcfbf9;
+  text-align: center;
+}
+
+/* 并排时每格的图不要再套一层内边距,否则可用宽度白掉一截 */
+.cmp-cell .plot2d {
+  padding: 6px 4px 2px;
+}
+
+.cmp-cell .derivation {
+  padding: 12px 14px 14px;
+}

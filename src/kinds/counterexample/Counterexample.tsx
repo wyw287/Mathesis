@@ -1,6 +1,5 @@
 import { useMemo } from 'react';
-import { Latex } from '../../renderers/Latex';
-import { Markdown } from '../../renderers/Markdown';
+import { MathText } from '../../renderers/Markdown';
 import type { CanvasEvent, CounterexampleCheck, CounterexampleSpec } from '../../types/artifact';
 import { Plot2D } from '../plot2d/Plot2D';
 import { evaluateAll, type CheckOutcome } from './checks';
@@ -41,7 +40,7 @@ export function Counterexample({ spec, scope, artifactId, rev, onParam, emit }: 
     <div className="ce">
       <div className="ce-claim">
         <span className="ce-claim-tag">待反驳</span>
-        <Label text={spec.claim} />
+        <MathText text={spec.claim} />
       </div>
 
       {/* 候选对象就是一张普通的 plot2d —— 参数、曲线、缩放全都复用 */}
@@ -68,7 +67,7 @@ export function Counterexample({ spec, scope, artifactId, rev, onParam, emit }: 
           <>
             <div className="ce-verdict-main">
               <strong>反例成立。</strong>
-              <Label text={spec.found ?? '当前这组参数下,前提全部满足而结论不成立。'} />
+              <MathText text={spec.found ?? '当前这组参数下,前提全部满足而结论不成立。'} />
             </div>
             {verdict.assertedCount > 0 && (
               // 说清楚哪些没验证过。学生要能自己判断这个反例有多可靠。
@@ -101,17 +100,9 @@ function CheckRow({ check, outcome }: { check: CounterexampleCheck; outcome: Che
     <div className={`ce-check ${outcome.status}`}>
       <span className="ce-mark">{MARK[outcome.status]}</span>
       <span className="ce-label">
-        <Label text={check.label} />
+        <MathText text={check.label} />
       </span>
       <span className="ce-detail">{outcome.detail}</span>
     </div>
   );
-}
-
-/**
- * 标签里可能是散文夹公式(带 `$`),也可能整句就是 LaTeX(不带 `$`)。
- * 模型两种写法都会用,所以两种都得认。
- */
-function Label({ text }: { text: string }) {
-  return text.includes('$') ? <Markdown source={text} /> : <Latex tex={text} />;
 }

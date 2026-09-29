@@ -12,6 +12,14 @@ interface Props {
   spec: Plot2DSpec;
   scope: Record<string, number>;
   artifactId: string;
+  /**
+   * SVG 里 clipPath 的 id 前缀。
+   *
+   * 默认就用 artifactId,但**并排对比里一张卡片会嵌好几张图**,它们共用同一个
+   * artifactId。重复的 DOM id 会让 `url(#clip-…)` 解析到第一个匹配的节点 ——
+   * 两边宽度不同时就会剪错。所以并排时每一格要传一个不同的 key。
+   */
+  clipKey?: string;
   /** artifact 修订号:变了说明 AI 改了这张图,本地视野覆盖要作废 */
   rev: number;
   onParam: (name: string, value: number) => void;
@@ -39,7 +47,8 @@ type GridCurve =
   | { kind: 'implicit'; curve: Extract<Curve, { type: 'implicit' }>; index: number; segments: Segment[] }
   | { kind: 'vectorField'; curve: Extract<Curve, { type: 'vectorField' }>; index: number; arrows: Arrow[] };
 
-export function Plot2D({ spec, scope, artifactId, rev, onParam, emit }: Props) {
+export function Plot2D({ spec, scope, artifactId, clipKey, rev, onParam, emit }: Props) {
+  const clip = clipKey ?? artifactId;
   const [wrapRef, width] = useWidth<HTMLDivElement>();
   const svgRef = useRef<SVGSVGElement>(null);
   const [override, setOverride] = useState<{ x: [number, number]; y: [number, number] } | null>(null);
@@ -47,7 +56,8 @@ export function Plot2D({ spec, scope, artifactId, rev, onParam, emit }: Props) {
   // AI 改了 spec，本地的手动缩放就作废 —— 否则它会悄悄盖掉 AI 想让学生看的范围
   useEffect(() => setOverride(null), [rev, spec.view.x[0], spec.view.x[1]]);
 
-  const w = Math.max(320, width);
+  // 260 而不是更大的值:并排三格时每格只有约 280px,卡在 320 会横向溢出
+  const w = Math.max(260, width);
   const plotW = w - PAD.l - PAD.r;
   const plotH = HEIGHT - PAD.t - PAD.b;
 
@@ -224,7 +234,7 @@ export function Plot2D({ spec, scope, artifactId, rev, onParam, emit }: Props) {
         onPointerCancel={onPointerUp}
       >
         <defs>
-          <clipPath id={`clip-${artifactId}`}>
+          <clipPath id={`clip-${clip}`}>
             <rect x={PAD.l} y={PAD.t} width={plotW} height={plotH} />
           </clipPath>
         </defs>
@@ -234,7 +244,7 @@ export function Plot2D({ spec, scope, artifactId, rev, onParam, emit }: Props) {
         <Grid view={view} tx={tx} ty={ty} xStep={xStep} yStep={yStep} plotW={plotW} plotH={plotH} />
         <Axes view={view} tx={tx} ty={ty} xStep={xStep} yStep={yStep} plotW={plotW} plotH={plotH} />
 
-        <g clipPath={`url(#clip-${artifactId})`}>
+        <g clipPath={`url(#clip-${clip})`}>
           {samples.map(({ curve, index, pts }) => {
             const color = colorAt(index, curve.style?.color);
             const dash = DASH[curve.style?.dash ?? 'solid'];
