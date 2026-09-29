@@ -262,8 +262,34 @@ export type ArtifactSpec =
   | HtmlSpec
   | CounterexampleSpec
   | CompareSpec
-  | Plot3DSpec;
+  | Plot3DSpec
+  | LinearSpec;
 export type ArtifactKind = ArtifactSpec['kind'];
+
+// ---------------------------------------------------------------- 线代
+
+/**
+ * 2×2 线性变换的几何视图。
+ *
+ * 线代里最难用文字讲清的部分是「矩阵到底对空间做了什么」。**让模型只写矩阵,
+ * 其余全由渲染器算** —— 变换后的网格、单位正方形的像、行列式、特征方向,
+ * 这些让模型自己算的话全是它容易写错的地方,而且学生看不出来。
+ *
+ * 矩阵的四个元素是**表达式**而不是数字,于是每个都能挂一个滑块 ——
+ * 拖一下就看见平面被扭成什么样,这是这个 kind 几乎全部的价值所在。
+ */
+export interface LinearSpec {
+  kind: 'linear';
+  /** 2×2 矩阵,按行给:[["a","b"],["c","d"]] 表示 [a b; c d]。 */
+  matrix: [[string, string], [string, string]];
+  /** 可拖动参数。矩阵元素和 probe 都能引用。 */
+  params?: ParamSpec[];
+  /** 显示范围,默认 [-3, 3]²。 */
+  view?: { x: [number, number]; y: [number, number] };
+  /** 可选:一个探测向量,同时画出它和它的像。表达式可引用 params,于是拖滑块就能看它怎么被变换。 */
+  probe?: { x: string; y: string; label?: string };
+  note?: string;
+}
 
 // ---------------------------------------------------------------- 并排对比
 

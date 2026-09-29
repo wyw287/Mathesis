@@ -1539,3 +1539,128 @@ button {
   border-left-color: var(--gap-unjustified-fg) !important;
   background: var(--gap-unjustified-bg) !important;
 }
+
+/* ------------------------------------------------------------ 线代变换视图 */
+
+.linear {
+  padding: 10px 8px 4px;
+}
+
+/* 原网格经变换后的样子。只在网格之上淡淡一层,不能盖过曲线。 */
+.lin-grid-line {
+  stroke: rgba(37, 99, 235, 0.28);
+  stroke-width: 1;
+}
+
+.lin-unit {
+  fill: none;
+  stroke: var(--border-strong);
+  stroke-width: 1.4;
+  stroke-dasharray: 4 3;
+}
+
+/* 单位正方形的像 —— 它的面积就是 |det|,是这张图要传达的核心 */
+.lin-image {
+  fill: rgba(37, 99, 235, 0.16);
+  stroke: var(--accent);
+  stroke-width: 1.8;
+}
+
+.lin-eigen {
+  stroke: #d97706;
+  stroke-width: 1.6;
+  stroke-dasharray: 7 5;
+  opacity: 0.9;
+}
+
+.lin-basis {
+  stroke: var(--faint);
+  stroke-width: 1.6;
+}
+
+.lin-basis-image {
+  stroke: #dc2626;
+  stroke-width: 2;
+}
+
+.lin-probe {
+  stroke: #059669;
+  stroke-width: 1.6;
+  stroke-dasharray: 3 3;
+}
+
+.lin-probe-image {
+  stroke: #059669;
+  stroke-width: 2.2;
+}
+
+.lin-panel {
+  display: flex;
+  align-items: flex-start;
+  gap: 22px;
+  padding: 10px 14px 4px;
+  flex-wrap: wrap;
+}
+
+.lin-invalid {
+  color: var(--gap-unjustified-fg);
+  font-size: 13px;
+}
+
+.lin-matrix {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 14px;
+}
+
+.lin-bracket {
+  font-size: 30px;
+  line-height: 0.9;
+  color: var(--border-strong);
+  font-weight: 300;
+}
+
+.lin-cells {
+  display: grid;
+  grid-template-columns: auto auto;
+  gap: 3px 16px;
+  text-align: right;
+}
+
+.lin-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: 13px;
+  min-width: 0;
+}
+
+.lin-fact {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* det = 0 是个教学要点(不可逆、降秩),不是普通信息 */
+.lin-fact.warn .lin-fact-value {
+  color: var(--gap-unjustified-fg);
+  font-weight: 600;
+}
+
+.lin-fact-name {
+  color: var(--faint);
+  font-size: 12px;
+  flex: none;
+}
+
+.lin-fact-value {
+  font-family: var(--mono);
+}
+
+.lin-fact-note {
+  color: var(--muted);
+  font-size: 12.5px;
+}

@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ParamSliders } from '../../renderers/ParamSliders';
+import { PAD, PlaneAxes, PlaneGrid, clampCoord } from '../../renderers/plane';
 import { marchingSquares, sampleVectorField, toZeroForm, type Arrow, type Segment } from '../../lib/field';
-import { formatTick, niceStep, safeEval, sampleExplicit, sampleParametric } from '../../lib/math';
+import { niceStep, safeEval, sampleExplicit, sampleParametric } from '../../lib/math';
 import type { CanvasEvent, Curve, Plot2DSpec } from '../../types/artifact';
 import { colorAt } from './palette';
 
 const HEIGHT = 420;
-const PAD = { l: 46, r: 18, t: 14, b: 32 };
 const DASH = { solid: undefined, dashed: '7 5', dotted: '2 4' } as const;
 
 interface Props {
@@ -242,8 +242,8 @@ export function Plot2D({ spec, scope, artifactId, clipKey, rev, onParam, emit }:
 
         <rect x={PAD.l} y={PAD.t} width={plotW} height={plotH} className="plot-bg" />
 
-        <Grid view={view} tx={tx} ty={ty} xStep={xStep} yStep={yStep} plotW={plotW} plotH={plotH} />
-        <Axes view={view} tx={tx} ty={ty} xStep={xStep} yStep={yStep} plotW={plotW} plotH={plotH} />
+        <PlaneGrid view={view} tx={tx} ty={ty} xStep={xStep} yStep={yStep} plotW={plotW} plotH={plotH} />
+        <PlaneAxes view={view} tx={tx} ty={ty} xStep={xStep} yStep={yStep} plotW={plotW} plotH={plotH} />
 
         <g clipPath={`url(#clip-${clip})`}>
           {samples.map(({ curve, index, pts }) => {
@@ -366,73 +366,7 @@ export function Plot2D({ spec, scope, artifactId, clipKey, rev, onParam, emit }:
 
 // ------------------------------------------------------------------ 子组件
 
-interface AxesProps {
-  view: { x: [number, number]; y: [number, number] };
-  tx: (x: number) => number;
-  ty: (y: number) => number;
-  xStep: number;
-  yStep: number;
-  plotW: number;
-  plotH: number;
-}
-
-function Grid({ view, tx, ty, xStep, yStep, plotW, plotH }: AxesProps) {
-  const xs = ticks(view.x, xStep);
-  const ys = ticks(view.y, yStep);
-  return (
-    <g className="grid">
-      {xs.map((x) => (
-        <line key={`x${x}`} x1={tx(x)} y1={PAD.t} x2={tx(x)} y2={PAD.t + plotH} />
-      ))}
-      {ys.map((y) => (
-        <line key={`y${y}`} x1={PAD.l} y1={ty(y)} x2={PAD.l + plotW} y2={ty(y)} />
-      ))}
-    </g>
-  );
-}
-
-function Axes({ view, tx, ty, xStep, yStep, plotW, plotH }: AxesProps) {
-  const xs = ticks(view.x, xStep);
-  const ys = ticks(view.y, yStep);
-  const axisY = Math.min(Math.max(ty(0), PAD.t), PAD.t + plotH);
-  const axisX = Math.min(Math.max(tx(0), PAD.l), PAD.l + plotW);
-
-  return (
-    <g className="axes">
-      <line x1={PAD.l} y1={axisY} x2={PAD.l + plotW} y2={axisY} />
-      <line x1={axisX} y1={PAD.t} x2={axisX} y2={PAD.t + plotH} />
-      {xs.map((x) => (
-        <g key={`x${x}`}>
-          <line x1={tx(x)} y1={axisY - 3} x2={tx(x)} y2={axisY + 3} />
-          <text x={tx(x)} y={axisY + 15} textAnchor="middle" className="tick">
-            {formatTick(x, xStep)}
-          </text>
-        </g>
-      ))}
-      {ys.map((y) => (
-        <g key={`y${y}`}>
-          <line x1={axisX - 3} y1={ty(y)} x2={axisX + 3} y2={ty(y)} />
-          <text x={axisX - 7} y={ty(y) + 4} textAnchor="end" className="tick">
-            {formatTick(y, yStep)}
-          </text>
-        </g>
-      ))}
-    </g>
-  );
-}
-
 // -------------------------------------------------------------------- 工具
-
-function ticks([a, b]: [number, number], step: number): number[] {
-  if (!(step > 0) || !Number.isFinite(step)) return [];
-  const out: number[] = [];
-  const start = Math.ceil(a / step) * step;
-  for (let v = start, i = 0; v <= b && i < 200; v += step, i++) {
-    // 消掉浮点累积误差,否则刻度会出现 0.30000000000000004
-    out.push(Math.abs(v) < step * 1e-6 ? 0 : Number(v.toFixed(10)));
-  }
-  return out;
-}
 
 /**
  * 把所有箭头拼成一条 path。
@@ -505,7 +439,6 @@ function pathFrom(pts: Pt[], tx: (x: number) => number, ty: (y: number) => numbe
   return d;
 }
 
-const clampCoord = (v: number) => Math.max(-1e5, Math.min(1e5, v)).toFixed(2);
 
 /**
  * 自动 y 范围。

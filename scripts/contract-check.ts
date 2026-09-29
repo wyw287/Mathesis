@@ -540,5 +540,50 @@ rejects('vars 是空数组', {
   steps: [{ id: 's1', latex: 'x', reason: 'r', check: { expr: 'x', vars: [] } }],
 }, 'vars');
 
+console.log('\n线代变换视图 —— 解析');
+
+const LIN_SPEC = {
+  kind: 'linear',
+  matrix: [['a', 'b'], ['c', 'd']],
+  params: [
+    { name: 'a', value: 1, min: -3, max: 3 },
+    { name: 'b', value: 0, min: -3, max: 3 },
+    { name: 'c', value: 0, min: -3, max: 3 },
+    { name: 'd', value: 1, min: -3, max: 3 },
+  ],
+};
+
+ok('能解析出矩阵', () => {
+  const s = parseSpec(LIN_SPEC);
+  if (s.kind !== 'linear') throw new Error('kind 错了');
+  if (s.matrix[0][1] !== 'b' || s.matrix[1][0] !== 'c') throw new Error('矩阵元素串位了');
+  if (s.params?.length !== 4) throw new Error('参数丢了');
+});
+ok('数字字面量也接受', () => {
+  const s = parseSpec({ kind: 'linear', matrix: [['1', '0'], ['0', '-1']] });
+  if (s.kind !== 'linear' || s.matrix[1][1] !== '-1') throw new Error('没解析成数字');
+});
+ok('探测向量和视野', () => {
+  const s = parseSpec({
+    ...LIN_SPEC,
+    probe: { x: 'vx', y: 'vy', label: 'v' },
+    view: { x: [-5, 5], y: [-5, 5] },
+  });
+  if (s.kind !== 'linear') throw new Error('kind 错了');
+  if (s.probe?.x !== 'vx') throw new Error('probe 丢了');
+  if (s.view?.x[1] !== 5) throw new Error('view 丢了');
+});
+ok('标题用矩阵本身', () => {
+  const t = titleFor(parseSpec({ kind: 'linear', matrix: [['2', '0'], ['0', '2']] }));
+  if (!t.includes('2')) throw new Error(`得到 ${t}`);
+});
+
+rejects('矩阵只有一行', { kind: 'linear', matrix: [['1', '0']] }, 'matrix');
+rejects('某一行有三个元素', { kind: 'linear', matrix: [['1', '0', '0'], ['0', '1', '0']] }, 'matrix');
+rejects('矩阵元素写成 LaTeX', { kind: 'linear', matrix: [['\\cos t', '0'], ['0', '1']] }, '');
+rejects('矩阵元素里写赋值', { kind: 'linear', matrix: [['a=1', '0'], ['0', '1']] }, '');
+rejects('probe 缺 y 分量', { ...LIN_SPEC, probe: { x: '1' } }, 'probe.y');
+rejects('view 的区间反了', { ...LIN_SPEC, view: { x: [5, -5], y: [-3, 3] } }, '起 < 止');
+
 console.log(`\n${pass} 通过, ${fail} 失败\n`);
 if (fail) process.exit(1);

@@ -25,6 +25,7 @@ import { htmlModule } from './html';
 import { counterexampleModule } from './counterexample';
 import { compareModule } from './compare';
 import { plot3dModule } from './plot3d';
+import { linearModule } from './linear';
 
 /**
  * 全部已注册的 artifact 类型。**新增 kind 就在这里加一行。**
@@ -39,6 +40,7 @@ export const KIND_MODULES = [
   counterexampleModule,
   compareModule,
   plot3dModule,
+  linearModule,
   htmlModule,
 ] as const;
 
