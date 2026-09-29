@@ -169,11 +169,15 @@ export function openDb(): Promise<IDBDatabase> {
  * 关掉并忘掉连接。
  *
  * 记忆化的代价:进程里从此只有一条连接,谁想换一个后端都得先经过这里。
- * 测试就是这么用的 —— 每个用例装一个全新的假 IndexedDB,不关掉上一个的话
- * 会静默地复用旧连接,`failOpen` 之类的注入根本不会生效。
+ * 测试就是这么用的 —— 每个用例装一个全新的假 IndexedDB。
+ *
+ * 它和 `onversionchange` 走**同一条**清理路径:这里不只是"我不用了",
+ * 而是"这条连接没了",那么拿着它的那些 backend 必须一起放掉。
+ * 少了后半句,测试里换成假 IndexedDB 之后产品代码还会一直用着旧的 memory 后端,
+ * 断言看着过了、其实什么都没测到。
  */
 export function closeDb(): void {
   const c = conn;
-  conn = null;
   void c?.then((db) => db.close()).catch(() => {});
+  dropConnection();
 }

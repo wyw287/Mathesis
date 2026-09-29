@@ -746,3 +746,17 @@ export const useSession = create<SessionState>()(
 
 // 模块求值到这里,`useSession` 一定存在了 —— 之后落点再变就能实时反映到界面上。
 publishTier = (t: StorageTier) => useSession.setState({ storageTier: t });
+
+/**
+ * 立刻把待写内容落盘。
+ *
+ * 合并窗口是 400ms(见 idb-storage 的 FLUSH_DELAY_MS):一次流式回复会改上千次
+ * state,合并掉绝大多数是必须的,但**窗口里悬着的内容在页面被关掉时是会丢的**。
+ * 所以每个请求结束时补一次显式的落盘 —— 那是内容最完整、也最可能被打断的一刻。
+ *
+ * 页面隐藏那条路(`pagehide`)只能 `void` 一个异步写、不被 await,所以不能指望它
+ * 兜住这件事;它的作用是在真的关页面时"尽力而为"。
+ */
+export function flushStorage(): Promise<void> {
+  return persistStorage.flush();
+}

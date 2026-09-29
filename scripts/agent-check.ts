@@ -485,6 +485,24 @@ async function main() {
     s.close();
   }
 
+  console.log('\n请求结束时要把待写内容落盘');
+
+  {
+    const s = await serve([{ content: '好', finish: 'stop' }]);
+    const idb = installIndexedDB();
+    await reset(s.url);
+    idb.data.clear();
+
+    await send({ text: '落盘测试' });
+
+    // 假服务器是毫秒级返回的,而合并窗口是 400ms —— 定时器不可能在这中间插进来。
+    // 所以这里读得到,只可能是 send() 自己在收尾时落的那一次。
+    const raw = idb.data.get('mathesis.session') ?? '';
+    ok('send 结束时就落盘了,不用等合并窗口', raw.includes('落盘测试'), raw ? '(落了,但里面没有那句话)' : '(压根没落盘)');
+    idb.uninstall();
+    s.close();
+  }
+
   console.log(`\n${pass} 通过, ${fail} 失败\n`);
 
 }

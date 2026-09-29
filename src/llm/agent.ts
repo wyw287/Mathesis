@@ -6,7 +6,7 @@
  *  2. 工具执行的失败处理 —— 校验错误回给模型让它自己改,而不是白屏
  *  3. 降级 —— 中转不支持 tool calling 时自动切文本模式,并记住这个事实
  */
-import { useSession, type ApiMessage, type InteractionStats, type MessageImage } from '../store/session';
+import { useSession, flushStorage, type ApiMessage, type InteractionStats, type MessageImage } from '../store/session';
 import type { CanvasArtifact, CanvasEvent } from '../types/artifact';
 import { TOOLS, toOpenAiTools, toolByName, toolsAsText, type ToolContext } from '../tools';
 import { parseSpec, titleFor } from '../kinds/registry';
@@ -543,6 +543,12 @@ export async function send(opts: SendOptions = {}): Promise<void> {
     reportError(e);
   } finally {
     useSession.setState({ busy: false, status: null });
+    // 请求结束了,立刻落盘。
+    //
+    // 不这么做的话,内容要等合并窗口到期才写 —— 而请求刚结束正是内容最完整、
+    // 也最可能被"关页面/切标签页"打断的一刻。`pagehide` 那条路只能 void 一个
+    // 异步写、不被 await,兜不住这件事。
+    await flushStorage();
   }
 }
 

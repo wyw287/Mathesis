@@ -11,7 +11,7 @@
  * 两条都不体现在正常路径上(单会话永远是对的),只能专门测。
  * 运行:npm run check:store
  */
-import { blankSession, referencedImageIds, useSession } from '../src/store/session';
+import { blankSession, flushStorage, referencedImageIds, useSession } from '../src/store/session';
 import type { ChatMessage } from '../src/store/session';
 import { getDataUrl, putImage } from '../src/lib/blob-store';
 import { installIndexedDB } from './fake-idb';
@@ -322,6 +322,26 @@ async function main() {
     store().pushEvent({ type: 'paramChange', artifactId: store().artifacts[0].id, param: 'a', value: 2 });
     store().clearConversation();
     ok('滑块操作也保留', store().pendingEvents.length === 1, String(store().pendingEvents.length));
+  }
+
+  console.log('\n待写内容能被立刻落盘');
+
+  {
+    // 合并窗口是 400ms(一次流式回复会改上千次 state,合并是必须的),
+    // 但窗口里悬着的内容在页面被关掉时是会丢的。所以有个显式落盘的口子。
+    const idb = installIndexedDB();
+    resetStore();
+    store().pushMessage({ role: 'user', content: '落盘测试' });
+
+    ok('没调之前还在待写队列里(没有立刻写)', idb.data.get('mathesis.session') === undefined);
+
+    await flushStorage();
+    ok(
+      'flushStorage 之后立刻落了盘',
+      (idb.data.get('mathesis.session') ?? '').includes('落盘测试'),
+      String(idb.data.get('mathesis.session')).slice(0, 60),
+    );
+    idb.uninstall();
   }
 
   console.log(`\n${pass} 通过, ${fail} 失败\n`);
