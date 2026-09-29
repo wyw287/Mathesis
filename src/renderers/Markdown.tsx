@@ -1,33 +1,123 @@
-import type { ReactNode } from 'react';
+/**
+ * Markdown 渲染。
+ *
+ * ## 为什么现在用库而不是手写
+ *
+ * 之前这里是手写的解析器(~250 行),理由是"不想碰 innerHTML,避免 XSS"。
+ * 那个理由只排除了 `marked` / `markdown-it` 这一类**产出 HTML 字符串**的库,
+ * 却没排除 `react-markdown` —— 它跑在 AST 上、直接产出 React 元素,安全性质
+ * 和手写版完全一样。
+ *
+ * 换掉它的真正原因是**覆盖面**:手写版连续漏了 `\text{中文}`、多转义一层、表格,
+ * 而且三次都是用户撞出来的,不是测试发现的。自己在实现一份别人已经实现过的规范,
+ * 漏是必然的。
+ *
+ * ## 安全边界(换库之后要重新确认的两条)
+ *
+ * · **不接 `rehype-raw`。** 默认情况下 markdown 里的原始 HTML 不会被渲染,
+ *   这正是我们要的 —— 一旦接上,模型输出就能注入真实 DOM。
+ * · **URL 由 react-markdown 的 urlTransform 过滤**,`javascript:` 之类的协议会被
+ *   剥掉。这两条都有测试盯着(render-check 里那组恶意输出用例)。
+ */
+import ReactMarkdown, { type Components } from 'react-markdown';
+import rehypeKatex from 'rehype-katex';
+import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import { collapseOverEscaped } from '../lib/latex-plain';
 import { Latex } from './Latex';
 
-/**
- * 极简 Markdown 渲染器,输出 React 元素而**不碰 innerHTML**。
- *
- * 为什么不用 marked 之类的库:这个产品的形态是 BYOK,API Key 存在 localStorage 里,
- * 所以模型输出是实打实的不可信输入。用 marked 就得再引一个 sanitizer,
- * 而自己产出 React 元素则从构造上就不可能注入。覆盖面按「模型讲数学时真会写的」
- * 来定:粗体、斜体、行内代码、代码块、标题、列表、引用、分隔线、链接(仅 http/https)、
- * 以及 $...$ / $$...$$ 公式。
- */
+// ------------------------------------------------------------------ 插件
 
-const INLINE =
-  /(\$\$[\s\S]+?\$\$)|(\$[^$\n]+?\$)|(`[^`\n]+?`)|(\*\*[^\n]+?\*\*)|(__[^\n]+?__)|(\*[^*\n]+?\*)|(\[[^\]\n]+\]\(https?:\/\/[^)\s]+\))/g;
+interface HastNode {
+  type?: string;
+  tagName?: string;
+  properties?: Record<string, unknown>;
+  value?: string;
+  children?: HastNode[];
+}
+
+/**
+ * 在 `rehype-katex` **之前**跑:把多转义一层的反斜杠折回来。
+ *
+ * 模型经常在 JSON 里把 LaTeX 多转义一层(`\\times`),而 `\\` 在 LaTeX 里是
+ * **换行符** —— KaTeX 不会报错,它会规规矩矩渲染出一个断行。所以这个折叠
+ * 必须提前做,不能等出错再补救。
+ *
+ * 只对 `\\` 后面紧跟已知命令名的情况生效;合法 LaTeX 里不存在这种写法
+ * (矩阵换行、aligned 里的 `\\` 后面总是空格或 `[`),所以不会误伤。
+ */
+function rehypeFixEscapes() {
+  return (tree: HastNode): void => {
+    const walk = (node: HastNode) => {
+      // 数学节点是 `<code class="language-math math-inline">`,**不是 `<span>`** ——
+      // 这是实测出来的:`remark-math` → `remark-rehype` 产出的是 code 元素,
+      // `rehype-katex` 也靠 `language-math` 这个类名去找它。
+      // 第一版按 span 匹配,一次都没命中,插件等于没接上。
+      const cls = node.properties?.className;
+      const isMath =
+        node.tagName === 'code' && Array.isArray(cls) && cls.includes('language-math');
+      if (isMath) {
+        const text = node.children?.find((c) => c.type === 'text' && typeof c.value === 'string');
+        if (text?.value) text.value = collapseOverEscaped(text.value);
+      }
+      for (const child of node.children ?? []) walk(child);
+    };
+    walk(tree);
+  };
+}
+
+const KATEX_OPTIONS = {
+  // 出错时渲染成红色内联提示而不是抛错 —— 一条坏公式不该让整段消息消失
+  throwOnError: false,
+  // 中文和部分符号在严格模式下会报警;我们这里的内容本来就杂
+  strict: false as const,
+  // trust:false 是必须的:它挡掉 \href、\htmlClass 这类能往外发请求的命令
+  trust: false,
+};
+
+const COMPONENTS: Components = {
+  // 外链统一加 noopener,并且新开标签 —— 否则点一个链接就把学生的画布顶掉了
+  a: ({ node: _node, href, children, ...props }) => {
+    // react-markdown 的 urlTransform 会把 `javascript:` 之类的协议剥成空串。
+    // 留一个 href="" 的链接,点了会刷新页面;不如把文字原样显示出来 ——
+    // 学生看到的是「这里本来有个链接但被拦了」,而不是一个莫名其妙的空链接。
+    if (!href) return <span {...props}>{children}</span>;
+    return (
+      <a {...props} href={href} target="_blank" rel="noreferrer noopener">
+        {children}
+      </a>
+    );
+  },
+  pre: ({ node: _node, ...props }) => <pre className="md-pre" {...props} />,
+  // 表格外面套一层可横向滚动的壳 —— 数学内容的表格经常很宽,
+  // 撑破对话栏比能滚动难看多了
+  table: ({ node: _node, ...props }) => (
+    <div className="md-table-wrap">
+      <table className="md-table" {...props} />
+    </div>
+  ),
+};
+
+// ------------------------------------------------------------------ 对外
 
 export function Markdown({ source }: { source: string }) {
-  return <>{parseBlocks(source).map(renderBlock)}</>;
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm, remarkMath]}
+      rehypePlugins={[rehypeFixEscapes, [rehypeKatex, KATEX_OPTIONS]]}
+      components={COMPONENTS}
+    >
+      {source}
+    </ReactMarkdown>
+  );
 }
 
 /**
  * 给「本来应该是公式」的字段用(命题、前提)。
  *
- * 规则刻意简单到没有猜测空间:只有一种情况需要按混排处理 ——
- * 模型把公式用 $ 包起来夹在说明文字里。其余一律当公式渲染。
- *
- * 这里曾经用「含中文就是说明文字」来判断,是错的:中文数学写作里
- * `\text{不存在}` 这类写法极其常见,那个猜测会把最正常的输入判成正文,
- * 结果整个命题以原始 LaTeX 显示出来。而 KaTeX 本身对中文和 \text{}
- * 都能正常处理,根本不需要猜。
+ * 规则刻意简单到没有猜测空间:含 `$` 说明是混排,交给 Markdown;
+ * 否则整句当公式渲染。这些字段在 schema 里本来就声明成 LaTeX,
+ * 而 KaTeX 对中文和 `\text{}` 都能正常处理,不需要猜。
  */
 export function MathBlock({ tex }: { tex: string }) {
   return tex.includes('$') ? <Markdown source={tex} /> : <Latex tex={tex} display />;
@@ -41,267 +131,4 @@ export function MathBlock({ tex }: { tex: string }) {
  */
 export function MathText({ text }: { text: string }) {
   return text.includes('$') ? <Markdown source={text} /> : <Latex tex={text} />;
-}
-
-// ------------------------------------------------------------------ 行内
-
-function inline(text: string, keyBase = 'i'): ReactNode[] {
-  const out: ReactNode[] = [];
-  let last = 0;
-  let n = 0;
-
-  for (const m of text.matchAll(INLINE)) {
-    const idx = m.index ?? 0;
-    if (idx > last) out.push(text.slice(last, idx));
-    // 槽位必须和 INLINE 的捕获组严格一一对应。多一个少一个都会静默错位 ——
-    // 之前这里多写了一个 emAlt,结果链接那一组被接成了斜体。
-    const [, display, inlineMath, code, bold, boldAlt, em, link] = m;
-    const k = `${keyBase}-${n++}`;
-
-    if (display) out.push(<Latex key={k} tex={display.slice(2, -2)} display />);
-    else if (inlineMath) out.push(<Latex key={k} tex={inlineMath.slice(1, -1)} />);
-    else if (code) out.push(<code key={k} className="md-code">{code.slice(1, -1)}</code>);
-    else if (bold ?? boldAlt) {
-      const inner = (bold ?? boldAlt)!;
-      out.push(<strong key={k}>{inline(inner.slice(2, -2), k)}</strong>);
-    } else if (em) {
-      out.push(<em key={k}>{inline(em.slice(1, -1), k)}</em>);
-    } else if (link) {
-      const parsed = /^\[([^\]]+)\]\((.+)\)$/.exec(link);
-      if (parsed) {
-        out.push(
-          <a key={k} href={parsed[2]} target="_blank" rel="noreferrer noopener">
-            {inline(parsed[1], k)}
-          </a>,
-        );
-      } else {
-        out.push(link);
-      }
-    }
-    last = idx + m[0].length;
-  }
-
-  if (last < text.length) out.push(text.slice(last));
-  return out;
-}
-
-// ------------------------------------------------------------------ 块级
-
-type Block =
-  | { t: 'p'; lines: string[] }
-  | { t: 'head'; level: number; text: string }
-  | { t: 'ul'; items: string[] }
-  | { t: 'ol'; items: string[] }
-  | { t: 'quote'; lines: string[] }
-  | { t: 'code'; text: string }
-  | { t: 'hr' }
-  | { t: 'table'; head: string[]; align: Align[]; rows: string[][] };
-
-type Align = 'left' | 'center' | 'right';
-
-const RE_HR = /^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/;
-const RE_FENCE = /^\s*```/;
-const RE_UL = /^\s*[-*+]\s+/;
-const RE_OL = /^\s*\d+[.)]\s+/;
-const RE_QUOTE = /^\s*>\s?/;
-
-/** 表格行按 `|` 切,并去掉首尾那两个管道符。 */
-function splitRow(line: string): string[] {
-  return line
-    .trim()
-    .replace(/^\|/, '')
-    .replace(/\|$/, '')
-    .split('|')
-    .map((c) => c.trim());
-}
-
-/** 分隔行:`|---|---|`、`| :--- | ---: |` 都算。 */
-function isSeparatorRow(line: string): boolean {
-  if (!line.includes('-')) return false;
-  const cells = splitRow(line);
-  return cells.length > 0 && cells.every((c) => /^:?-{2,}:?$/.test(c));
-}
-
-/**
- * 这一行是不是一张表的开头。
- *
- * 判据是**下一行必须是分隔行** —— 这是 GitHub 风格表格的硬要求,拿它当判据
- * 就不会把正文里偶然出现的 `|`(比如绝对值符号 `|x|`)误判成表格。
- */
-function startsTable(lines: string[], i: number): boolean {
-  return lines[i]!.includes('|') && i + 1 < lines.length && isSeparatorRow(lines[i + 1]!);
-}
-
-/** 判断这一行是不是某个块级结构的开头(用于决定段落在哪里断)。 */
-function startsBlock(lines: string[], i: number): boolean {
-  const l = lines[i]!;
-  return (
-    RE_FENCE.test(l) ||
-    RE_HR.test(l) ||
-    RE_UL.test(l) ||
-    RE_OL.test(l) ||
-    RE_QUOTE.test(l) ||
-    /^#{1,6}\s+/.test(l) ||
-    startsTable(lines, i)
-  );
-}
-
-function parseBlocks(src: string): Block[] {
-  const lines = src.replace(/\r\n?/g, '\n').split('\n');
-  const out: Block[] = [];
-  let i = 0;
-
-  while (i < lines.length) {
-    const line = lines[i];
-    if (!line.trim()) {
-      i++;
-      continue;
-    }
-
-    if (RE_FENCE.test(line)) {
-      i++;
-      const buf: string[] = [];
-      while (i < lines.length && !RE_FENCE.test(lines[i])) buf.push(lines[i++]);
-      i++; // 吃掉收尾的 ```
-      out.push({ t: 'code', text: buf.join('\n') });
-      continue;
-    }
-
-    // 表格要排在分隔线和段落之前:分隔行 `|---|---|` 里没有单独的 ---,
-    // 但它的判据要用到下一行,不能等到段落分支把行吞掉之后再判断
-    if (startsTable(lines, i)) {
-      const head = splitRow(line);
-      const align: Align[] = splitRow(lines[i + 1]!).map((c) =>
-        c.startsWith(':') && c.endsWith(':') ? 'center' : c.endsWith(':') ? 'right' : 'left',
-      );
-      i += 2;
-      const rows: string[][] = [];
-      // 数据行一直到空行或不再含 `|` 为止
-      while (i < lines.length && lines[i]!.trim() && lines[i]!.includes('|')) {
-        rows.push(splitRow(lines[i++]!));
-      }
-      out.push({ t: 'table', head, align, rows });
-      continue;
-    }
-
-    // 分隔线要排在列表前面判断,否则 --- 会被当成无序列表
-    if (RE_HR.test(line)) {
-      out.push({ t: 'hr' });
-      i++;
-      continue;
-    }
-
-    const head = /^(#{1,6})\s+(.*)$/.exec(line);
-    if (head) {
-      out.push({ t: 'head', level: head[1].length, text: head[2] });
-      i++;
-      continue;
-    }
-
-    if (RE_QUOTE.test(line)) {
-      const buf: string[] = [];
-      while (i < lines.length && RE_QUOTE.test(lines[i])) buf.push(lines[i++].replace(RE_QUOTE, ''));
-      out.push({ t: 'quote', lines: buf });
-      continue;
-    }
-
-    if (RE_UL.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && RE_UL.test(lines[i])) items.push(lines[i++].replace(RE_UL, ''));
-      out.push({ t: 'ul', items });
-      continue;
-    }
-
-    if (RE_OL.test(line)) {
-      const items: string[] = [];
-      while (i < lines.length && RE_OL.test(lines[i])) items.push(lines[i++].replace(RE_OL, ''));
-      out.push({ t: 'ol', items });
-      continue;
-    }
-
-    const buf: string[] = [];
-    while (i < lines.length && lines[i]!.trim() && !startsBlock(lines, i)) buf.push(lines[i++]!);
-    out.push({ t: 'p', lines: buf });
-  }
-
-  return out;
-}
-
-/** 段落内单个换行按换行显示 —— 模型经常用它做紧凑的分行列举。 */
-function joinLines(lines: string[], keyBase: string): ReactNode[] {
-  const out: ReactNode[] = [];
-  lines.forEach((l, i) => {
-    if (i > 0) out.push(<br key={`${keyBase}-br${i}`} />);
-    out.push(...inline(l, `${keyBase}-${i}`));
-  });
-  return out;
-}
-
-function renderBlock(b: Block, i: number): ReactNode {
-  switch (b.t) {
-    case 'p':
-      return <p key={i}>{joinLines(b.lines, `p${i}`)}</p>;
-    case 'head':
-      // 用 div 而不是 h1-h6:这是聊天流里的小标题,不该进文档大纲
-      return (
-        <div key={i} className={`md-head md-head-${Math.min(b.level, 4)}`}>
-          {inline(b.text, `h${i}`)}
-        </div>
-      );
-    case 'ul':
-      return (
-        <ul key={i}>
-          {b.items.map((it, j) => (
-            <li key={j}>{inline(it, `u${i}-${j}`)}</li>
-          ))}
-        </ul>
-      );
-    case 'ol':
-      return (
-        <ol key={i}>
-          {b.items.map((it, j) => (
-            <li key={j}>{inline(it, `o${i}-${j}`)}</li>
-          ))}
-        </ol>
-      );
-    case 'quote':
-      return <blockquote key={i}>{joinLines(b.lines, `q${i}`)}</blockquote>;
-    case 'code':
-      return (
-        <pre key={i} className="md-pre">
-          <code>{b.text}</code>
-        </pre>
-      );
-    case 'hr':
-      return <hr key={i} />;
-    case 'table':
-      // 表格外面套一层可横向滚动的壳:数学内容的表格经常很宽,
-      // 撑破对话栏比滚动难看多了
-      return (
-        <div key={i} className="md-table-wrap">
-          <table className="md-table">
-            <thead>
-              <tr>
-                {b.head.map((cell, j) => (
-                  <th key={j} style={{ textAlign: b.align[j] ?? 'left' }}>
-                    {inline(cell, `tb${i}-h${j}`)}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {b.rows.map((row, k) => (
-                <tr key={k}>
-                  {b.head.map((_, j) => (
-                    <td key={j} style={{ textAlign: b.align[j] ?? 'left' }}>
-                      {inline(row[j] ?? '', `tb${i}-${k}-${j}`)}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      );
-  }
 }

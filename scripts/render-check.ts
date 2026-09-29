@@ -43,7 +43,7 @@ ok('不该过度剥:只有一个 $ 时不处理', unwrap('$x') === '$x', unwrap(
 ok('不该过度剥:普通公式原样返回', unwrap('x^2') === 'x^2');
 
 console.log('\nMarkdown 块级');
-ok('标题', md('## 等价性').includes('md-head-2'), md('## 等价性'));
+ok('标题渲染成 h2', md('## 等价性').includes('<h2>'), md('## 等价性'));
 ok('无序列表', (() => {
   const h = md('- 第一\n- 第二');
   return h.includes('<ul>') && h.match(/<li>/g)?.length === 2;
@@ -56,13 +56,17 @@ ok('负数不会被当成列表', !md('-1 是下界').includes('<ul>'), md('-1 �
 
 console.log('\nMarkdown 行内 —— 「双星号没变粗」');
 ok('**加粗**', md('这是**重点**').includes('<strong>重点</strong>'), md('这是**重点**'));
-ok('__加粗__', md('这是__重点__').includes('<strong>重点</strong>'), md('这是__重点__'));
+ok('**加粗** 紧贴中文也能用', md('这是**重点**').includes('<strong>重点</strong>'), md('这是**重点**'));
+// `__粗体__` 在词中不生效是 CommonMark 的明文规定(为了保护 snake_case 标识符),
+// GitHub 上也是同样行为 —— 所以这不是我们的缺口,是标准。模型基本只用 **。
+ok('__粗体__ 在词中不生效(CommonMark 规定)', !md('这是__重点__').includes('<strong>'), '');
+ok('__粗体__ 不在词中时正常', md('__重点__').includes('<strong>重点</strong>'), md('__重点__'));
 ok('*斜体*', md('这是*强调*').includes('<em>强调</em>'), md('这是*强调*'));
-ok('行内代码', md('用 `plot2d` 画').includes('md-code'), md('用 `plot2d` 画'));
-ok('加粗里套代码', md('**用 `x` 表示**').includes('<strong>') && md('**用 `x` 表示**').includes('md-code'));
+ok('行内代码', md('用 `plot2d` 画').includes('<code>'), md('用 `plot2d` 画'));
+ok('加粗里套代码', md('**用 `x` 表示**').includes('<strong>') && md('**用 `x` 表示**').includes('<code>'));
 ok('加粗和公式混排', (() => {
   const h = md('**关键**：$x^2$');
-  return h.includes('<strong>关键</strong>') && h.includes('latex-inline');
+  return h.includes('<strong>关键</strong>') && h.includes('katex');
 })(), md('**关键**：$x^2$'));
 
 console.log('\n恶意输出 —— BYOK 下模型输出是不可信输入');
@@ -84,8 +88,11 @@ console.log('\n恶意输出 —— BYOK 下模型输出是不可信输入');
 }
 {
   const h = md(String.raw`$\href{javascript:alert(1)}{x}$`);
-  // KaTeX 的 trust:false 会砍掉 \href 的 URL,只留文本
-  ok('KaTeX 的 \\href 受 trust:false 限制', !h.includes('javascript:'), h);
+  // trust:false 让 KaTeX 拒绝 \href,把它当未知命令渲染成红色报错。
+  // 注意原始 TeX 会出现在 MathML 的 <annotation> 里(给读屏和复制用的),
+  // 所以「输出里有没有 javascript: 这个字符串」不能当判据 —— 那串是**惰性文本**。
+  // 真正的判据是:有没有产生 href 属性。
+  ok('KaTeX 的 \\href 不产生任何链接', !h.includes('href='), h);
 }
 
 console.log('\n命题 / 前提的渲染路由 —— 第二次报的 bug 在这里');
@@ -106,11 +113,13 @@ for (const [name, input] of [
 
 {
   const h = rendered('设 $f$ 在 $x_0$ 处连续');
-  ok('夹着 $ 的说明文字走混排渲染', h.includes('latex-inline') && !h.includes('latex-fallback'), h);
+  ok('夹着 $ 的说明文字走混排渲染', h.includes('katex') && !h.includes('latex-fallback'), h);
 }
 {
   const h = rendered(String.raw`$\lim_{x\to 0}\sin\frac{1}{x}$`);
-  ok('整体被 $ 包住时也不会退化成原始文本', !h.includes('latex-fallback') && !h.includes('\\lim'), h);
+  // 同理:原始 TeX 会在 MathML 的 <annotation> 里出现,不能拿它当"没渲染"的判据。
+  // 判据是:渲染出了 katex 结构,而且没有退化成 latex-fallback。
+  ok('整体被 $ 包住时也不会退化成原始文本', h.includes('katex') && !h.includes('latex-fallback'), h);
 }
 
 console.log('\n不崩');
@@ -158,7 +167,7 @@ console.log('\nMarkdown 表格');
 {
   // 单元格里的行内公式和粗体照常工作
   const h = md('| 形式 | 含义 |\n|---|---|\n| $Ax = b$ | 系数表 |\n| **线性映射** | 本身 |');
-  ok('单元格里的公式容器在', h.includes('latex-inline'), h);
+  ok('单元格里的公式容器在', h.includes('katex'), h);
   ok('单元格里的粗体在', h.includes('<strong>'), h);
 }
 
@@ -193,6 +202,35 @@ console.log('\nMarkdown 表格');
 {
   const h = md('| 单列 |\n|---|\n| 只有一个 |');
   ok('单列表格也能渲染', h.includes('<table'), h);
+}
+
+console.log('\n换库之后:多转义折叠插件要仍然生效');
+
+{
+  const B = String.fromCharCode(92);
+
+  // 这个插件是我为换库新写的(rehype 跑在 rehype-katex **之前**)。
+  // 不测的话,「多转义一层」那个刚修好的 bug 会悄悄回来。
+  const h = md(`$${B}${B}times$`);
+  ok('公式里的多转义反斜杠被折叠', h.includes('katex') && !h.includes('newline'), h.slice(0, 140));
+
+  // 反向:合法的换行符不能被折掉(矩阵靠它分行)
+  const keep = md(`$${B}begin{matrix}a ${B}${B} b${B}end{matrix}$`);
+  ok('合法的换行仍然保留(矩阵靠它分行)', keep.includes('mtable'), keep.slice(0, 140));
+
+  // 折叠之后要真的渲染成乘号,而不是「2 换行 times」。光查 includes('katex')
+  // 是不够的 —— 折叠失败时它同样是 true(上一版这里就是假通过)。
+  const ok2 = md(`$2${B}${B}times2$`);
+  ok('折叠之后没有多余的换行', ok2.includes('katex') && !ok2.includes('newline'), ok2.slice(0, 140));
+}
+
+{
+  // 换库之后这几条安全边界要重新确认 —— 它们是新库的行为,不是原来那条路径了
+  ok('原始 HTML 不被渲染(没接 rehype-raw)', !md('<img src=x onerror="alert(1)">').includes('<img'), '');
+  ok('script 标签不被渲染', !md('<script>alert(1)</script>').includes('<script'), '');
+  ok('javascript: 链接被剥掉,不产生 <a>', !md('[点我](javascript:alert(1))').includes('<a '), '');
+  ok('正常的 https 链接仍然是链接', md('[维基](https://zh.wikipedia.org)').includes('<a '), '');
+  ok('链接带 noopener', md('[维基](https://zh.wikipedia.org)').includes('noopener'), '');
 }
 
 console.log(`\n${pass} 通过, ${fail} 失败\n`);

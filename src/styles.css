@@ -1019,27 +1019,19 @@ button {
   margin: 0;
 }
 
-.md-head {
+/* 聊天流里的小标题不该进文档大纲,但 react-markdown 直接产出 h1-h6,
+   所以用 CSS 把它们压回聊天该有的字号 */
+.msg h1, .msg h2, .msg h3, .msg h4, .msg h5, .msg h6,
+.step-detail h1, .step-detail h2, .step-detail h3, .step-detail h4,
+.quiz-explanation h1, .quiz-explanation h2, .quiz-explanation h3, .quiz-explanation h4 {
   font-weight: 600;
-  margin: 14px 0 6px;
   line-height: 1.4;
+  margin: 14px 0 6px;
 }
 
-.md-head:first-child {
-  margin-top: 0;
-}
-
-.md-head-1 {
-  font-size: 16px;
-}
-.md-head-2 {
-  font-size: 15.5px;
-}
-.md-head-3,
-.md-head-4 {
-  font-size: 14.5px;
-  color: var(--muted);
-}
+.msg h1, .msg h2 { font-size: 16px; }
+.msg h3, .msg h4, .msg h5, .msg h6 { font-size: 14.5px; color: var(--muted); }
+.msg > :first-child, .step-detail > :first-child { margin-top: 0; }
 
 .msg blockquote,
 .step-detail blockquote,
@@ -1071,7 +1063,9 @@ button {
   font-family: var(--mono);
 }
 
-.md-code {
+/* react-markdown 产出裸 <code>,行内和块级都叫 code —— 用父元素区分。
+   pre 里面的就是块级,不该再加内边距和底色。 */
+code:not(pre > code) {
   font-family: var(--mono);
   font-size: 0.89em;
   background: #f0eeea;
