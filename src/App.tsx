@@ -12,6 +12,7 @@ export function App() {
   const hydrated = useSession((s) => s.hydrated);
   const busy = useSession((s) => s.busy);
   const storageTier = useSession((s) => s.storageTier);
+  const contextTokens = useSession((s) => s.contextTokens);
 
   /**
    * 把载入的数据对齐到当前这份代码:跑 schema 迁移 + 重算标题。
@@ -58,6 +59,20 @@ export function App() {
       <header className="topbar">
         <h1>Mathesis</h1>
         <SessionMenu />
+        {contextTokens !== null && (
+          // 在此之前,学生完全不知道自己离模型的上下文上限还有多远 ——
+          // 只能等撞上去那一刻看到一个报错。这一格就是把那件事提前摆出来。
+          <span
+            className="ctx-meter"
+            title={
+              '最近一次请求发出去的输入 token 数。会话越长它越大 ——\n' +
+              '每一轮都会重发目前为止的全部对话,其中还包括模型的完整思维链。\n' +
+              '撞到模型的上限时请求会直接被拒,那时点「清空对话」或开一个新会话。'
+            }
+          >
+            上下文 {fmtTokens(contextTokens)}
+          </span>
+        )}
         {storageTier === 'memory' && (
           // 说清楚,而不是默默降级 —— 用户以为在被保存、结果丢了一整段学习记录,
           // 是比"存不了"严重得多的失败。
@@ -86,4 +101,14 @@ export function App() {
       {showSettings && <Settings onClose={() => setShowSettings(false)} />}
     </div>
   );
+}
+
+/**
+ * 12_300 → "12.3k"。
+ *
+ * 刻意只留一位小数:这个数要回答的是"我该换会话了吗",看出量级就够了,
+ * 精确到个位反而更难读。
+ */
+function fmtTokens(n: number): string {
+  return n < 1000 ? String(n) : `${(n / 1000).toFixed(1)}k`;
 }

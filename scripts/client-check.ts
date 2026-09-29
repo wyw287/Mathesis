@@ -686,6 +686,72 @@ console.log('\n工具调用 id 与请求序列');
   s.close();
 }
 
+console.log('\n上下文用量:发得出、读得回');
+
+{
+  // 流式响应默认不带 usage,必须显式要 —— 那一项是界面上"这个会话有多长"的
+  // 唯一精确来源,漏发的话顶栏那格永远是空的,而且不会有任何报错提示你漏了。
+  let sent: any = null;
+  const s = await serve((_req, res, body) => {
+    sent = JSON.parse(body);
+    sse(res);
+    res.write(frame({ content: '好' }));
+    // 服务商在最后一个 chunk 里回一份用量
+    res.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 12345, completion_tokens: 6 } })}\n\n`);
+    res.write('data: [DONE]\n\n');
+    res.end();
+  });
+  const out = await call(s.url);
+  ok('请求里带了 stream_options.include_usage', sent?.stream_options?.include_usage === true, JSON.stringify(sent?.stream_options));
+  ok('usage 被读了回来', out.diag.usage?.prompt === 12345, JSON.stringify(out.diag.usage));
+  s.close();
+}
+
+console.log('\n上下文超限 —— 不能说成"模型名写错"');
+
+{
+  const s = await serve((_req, res) => {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(
+      JSON.stringify({
+        error: {
+          message: "This model's maximum context length is 65536 tokens. However, your messages resulted in 72000 tokens.",
+          code: 'context_length_exceeded',
+        },
+      }),
+    );
+  });
+  const err = await callExpectingError(s.url);
+  ok('认出来是上下文超限', /上下文窗口/.test(err.message), err.message.slice(0, 80));
+  ok('明确说不是模型名写错', /不是模型名写错/.test(err.message), '');
+  ok('并给出可操作的出路', /清空对话/.test(err.message) && /新会话/.test(err.message), '');
+  ok('带上历史条数,便于判断', /1 条消息/.test(err.message), err.message.slice(0, 200));
+  s.close();
+}
+
+{
+  // 中文报错也要认得出(有些中转会把服务商的原文翻译过)
+  const s = await serve((_req, res) => {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: '输入过长,超过模型的最大上下文长度' } }));
+  });
+  const err = await callExpectingError(s.url);
+  ok('中文的"输入过长"也认得出', /上下文窗口/.test(err.message), err.message.slice(0, 80));
+  s.close();
+}
+
+{
+  // 反向:普通的 400 不能被误判成上下文超限 —— 那会把真正的原因盖掉
+  const s = await serve((_req, res) => {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'Model not found' } }));
+  });
+  const err = await callExpectingError(s.url);
+  ok('别的 400 仍然按原来的说法', /模型名写错/.test(err.message), err.message.slice(0, 80));
+  ok('没有误判成上下文超限', !/上下文窗口/.test(err.message), '');
+  s.close();
+}
+
 console.log(`\n${pass} 通过, ${fail} 失败\n`);
 // 显式退出:假服务器可能还留着句柄,不能让它们把进程吊住
 process.exit(fail ? 1 : 0);

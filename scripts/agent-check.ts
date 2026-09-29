@@ -30,7 +30,14 @@ function ok(name: string, cond: boolean, detail = '') {
   }
 }
 
-type Reply = { content?: string; reasoning?: string; finish: string; toolCalls?: unknown[] };
+type Reply = {
+  content?: string;
+  reasoning?: string;
+  finish: string;
+  toolCalls?: unknown[];
+  /** 模拟服务商回的那份用量。真实接口里它跟在最后一个 chunk 上。 */
+  usage?: { prompt?: number; completion?: number };
+};
 
 /** 按顺序对每个请求回一个预设的响应。 */
 function serve(replies: Reply[]) {
@@ -53,6 +60,9 @@ function serve(replies: Reply[]) {
         if (reply.content) frame({ choices: [{ delta: { content: reply.content } }] });
         if (reply.toolCalls) frame({ choices: [{ delta: { tool_calls: reply.toolCalls } }] });
         frame({ choices: [{ delta: {}, finish_reason: reply.finish }] });
+        if (reply.usage) {
+          frame({ choices: [], usage: { prompt_tokens: reply.usage.prompt, completion_tokens: reply.usage.completion } });
+        }
         res.write('data: [DONE]\n\n');
         res.end();
       });
@@ -436,6 +446,42 @@ async function main() {
     const textBlock = rebuilt?.content?.find((p: any) => p.type === 'text')?.text ?? '';
     ok('没有把这一轮的话重复注入一遍', !String(textBlock).includes('学生说：'), String(textBlock).slice(0, 80));
     idb.uninstall();
+    s.close();
+  }
+
+  console.log('\n上下文用量 —— 让"我该换会话了吗"看得见');
+
+  {
+    const s = await serve([{ content: '好', finish: 'stop', usage: { prompt: 4321, completion: 6 } }]);
+    await reset(s.url);
+    useSession.setState({ contextTokens: null });
+
+    await send({ text: '你好' });
+    ok('用响应里的 usage 记下了上下文大小', useSession.getState().contextTokens === 4321, String(useSession.getState().contextTokens));
+    s.close();
+  }
+
+  {
+    // 拿不到 usage 时**不能把已有的数字抹掉**:界面上那个数一旦闪过 0,
+    // 学生只会以为上下文被清空了,而实际上什么都没发生。
+    const s = await serve([{ content: '好', finish: 'stop' }]);
+    await reset(s.url);
+    useSession.setState({ contextTokens: 999 });
+
+    await send({ text: '你好' });
+    ok('服务商没给 usage 时保持原值', useSession.getState().contextTokens === 999, String(useSession.getState().contextTokens));
+    s.close();
+  }
+
+  {
+    // 换会话要归零 —— 那是另一份历史,长度完全不相干
+    const s = await serve([{ content: '好', finish: 'stop', usage: { prompt: 5000 } }]);
+    await reset(s.url);
+    await send({ text: '你好' });
+    ok('先有一个数', useSession.getState().contextTokens === 5000);
+
+    useSession.getState().newSession();
+    ok('开新会话后归零(还不知道它有多长)', useSession.getState().contextTokens === null, String(useSession.getState().contextTokens));
     s.close();
   }
 

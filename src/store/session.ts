@@ -253,6 +253,7 @@ function loadInto(sess: SessionData) {
     apiHistory: [] as ApiMessage[],
     pendingEvents: [] as CanvasEvent[],
     focusId: undefined as string | undefined,
+    contextTokens: null as number | null,
   };
 }
 
@@ -369,6 +370,17 @@ interface SessionState {
   messages: ChatMessage[];
   apiHistory: ApiMessage[];
   pendingEvents: CanvasEvent[];
+  /**
+   * 最近一次请求的**输入** token 数 —— 也就是这个会话现在有多长。
+   *
+   * 存在的唯一理由是让「我该换会话了吗」变成一个看得见的问题:在此之前,
+   * 学生完全不知道自己离模型的上下文上限还有多远,只能等撞上去那一刻看到报错。
+   *
+   * **易失,而且是 null 不是 0。** 取不到时(服务商没在流式响应里给 usage)
+   * 宁可不显示,也不要拿一个估出来的数字冒充实测 —— 这个数的全部价值就是可信。
+   */
+  contextTokens: number | null;
+  setContextTokens: (n: number | null) => void;
   focusId?: string;
   busy: boolean;
   status: RunStatus | null;
@@ -442,6 +454,7 @@ export const useSession = create<SessionState>()(
       messages: [],
       apiHistory: [],
       pendingEvents: [],
+      contextTokens: null,
       focusId: undefined,
       busy: false,
       status: null,
@@ -613,6 +626,16 @@ export const useSession = create<SessionState>()(
         })),
 
       pushApi: (...m) => set((s) => ({ apiHistory: [...s.apiHistory, ...m] })),
+      /**
+       * `null` = 这一轮拿不到用量,**保持原值**。
+       *
+       * 这条规则由这里独家拥有 —— 调用方只管把 `usage?.prompt ?? null` 丢进来。
+       * 界面上那个数一旦闪过 0,学生只会以为上下文被清空了,而其实什么都没发生;
+       * 而分两处判空的话,哪一处都不是权威。
+       */
+      setContextTokens: (n) => {
+        if (n !== null) set({ contextTokens: n });
+      },
       setStatus: (phase) =>
         set({ status: phase === null ? null : { phase, startedAt: Date.now(), reasoningChars: 0 } }),
       // 单独一个动作,而不是复用 setStatus —— 后者会重置 startedAt,

@@ -241,6 +241,30 @@ function explainStatus(
     );
   }
 
+  // 上下文塞满了。
+  //
+  // 这一条必须单独认出来:下面那条通用的 400 会把学生引到「模型名写错、或者不支持
+  // tool calling」上去,而真实原因是**这段对话太长了**,该做的事也完全不同 ——
+  // 照着错误的方向去翻设置,只会白折腾。
+  if (
+    /context[\s_-]*length|maximum context|too many tokens|token[s]?\s*(?:limit|exceed)|reduce the length|输入.{0,8}(过长|超长|太长)|超过.{0,8}(最大|上限)|上下文.{0,8}(超|满|过长)/i.test(
+      body,
+    )
+  ) {
+    return (
+      `这一段对话太长了,超出了模型的上下文窗口（HTTP ${status}）。\n\n` +
+      '**不是模型名写错,也不是接口坏了。** 每一轮请求都会把目前为止的全部对话重发一遍,\n' +
+      '其中还包括模型的完整思维链 —— 它通常比正文长好几倍。所以这个会话聊到这里就到头了,\n' +
+      '而且通常比你以为的早得多。\n\n' +
+      `当前这一轮发出去的历史:${messages.length} 条消息。\n\n` +
+      '能做的:\n' +
+      '· 点右上角「清空对话」—— 画布上的图都还在,只是不再每轮重发一遍\n' +
+      '· 或者开一个新会话接着聊(一个会话一个话题,本来就是这么用的)\n' +
+      '· 换个窗口更大的模型也行,但那只是把墙往后推,推到哪儿还是会到\n' +
+      tail
+    );
+  }
+
   switch (status) {
     case 401:
     case 403:
@@ -292,6 +316,13 @@ export async function chat(opts: ChatOptions): Promise<ChatOutcome> {
   };
 
   const payload: Record<string, unknown> = { model: opts.model, messages: opts.messages, stream: true };
+  // 流式响应**默认不带** usage,要显式要,服务商才会在最后一个 chunk 里给一份。
+  // 那个数字是界面上"这个会话有多长"的唯一精确来源(见 store 的 contextTokens),
+  // 而代价只是响应里多一个小对象。
+  //
+  // 这是个标准 OpenAI 字段,但确实有中转会硬拒未知字段 —— 真遇到了(报错原文里
+  // 提到 stream_options),把这一行去掉就行:顶栏那格不显示,其余一切照常。
+  payload.stream_options = { include_usage: true };
   if (opts.tools && opts.tools.length) {
     // 刻意不发 tool_choice。'auto' 本来就是默认值,发了没有任何收益,
     // 但 DeepSeek 思考模式 + 工具调用时会因为它返回 400(见其思考模式文档)。
@@ -312,6 +343,7 @@ export async function chat(opts: ChatOptions): Promise<ChatOutcome> {
   diag.sent = {
     model: opts.model,
     stream: true,
+    stream_options: true,
     tools: opts.tools?.length ?? 0,
     ...(payload.max_tokens !== undefined ? { max_tokens: payload.max_tokens } : {}),
     ...(payload.reasoning_effort !== undefined ? { reasoning_effort: payload.reasoning_effort } : {}),

@@ -77,6 +77,15 @@ button {
   font-size: 12.5px;
 }
 
+/* 上下文用量。和 id、修订号同一族:是给人看的状态,但抢眼会碍事。 */
+.ctx-meter {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--faint);
+  flex: none;
+  white-space: nowrap;
+}
+
 .spacer {
   flex: 1;
 }

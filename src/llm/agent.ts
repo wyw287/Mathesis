@@ -331,6 +331,12 @@ async function runLoop(opts: LoopOptions): Promise<void> {
       else throw e;
     }
 
+    // 记下这一轮**发出去**的输入 token 数 —— 它就是当前上下文有多大。
+    // 多个工具轮次里每一次都会更新,而循环里后面的那次总是更大的,所以最后留下的是
+    // 本轮最大的那个,正是想要的。拿不到就传 null,由 store 决定"保持原值"
+    // (判空放在那一处,而不是这里 —— 否则那条规则有两个家,哪个都不是权威)。
+    useSession.getState().setContextTokens(outcome?.diag.usage?.prompt ?? null);
+
     // 空响应。这里不立刻失败 —— 有一种情况值得再给一次机会:
     // 推理模型把整份预算烧在思维链上、正文一个字没来得及写。
     //
