@@ -89,7 +89,7 @@ export function titleFor(spec: ArtifactSpec): string {
 }
 
 /**
- * 把从 localStorage 载入的 artifact 对齐到当前这份代码:跑 schema 迁移 + 重算标题。
+ * 把从存储载入的 artifact 对齐到当前这份代码:跑 schema 迁移 + 重算标题。
  *
  * 为什么需要它 —— title 按契约是 artifact 的持久字段,但它其实是 spec 的**派生数据**。
  * 只存不算的后果有两个,都真实发生过:

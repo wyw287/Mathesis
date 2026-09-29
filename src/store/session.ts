@@ -48,8 +48,9 @@ export interface ChatMessage {
   /**
    * 推理模型的思维链。只用于展示,不回灌给模型(DeepSeek 这类也不接受把它塞回上下文)。
    *
-   * **不落盘** —— 每条可能是上万字符,跟着 messages 一起存,聊几十轮就把
-   * localStorage 撑爆了。它的价值在当下那一轮,刷新页面之后丢掉是可以接受的。
+   * **不落盘** —— 每条可能是上万字符,跟着 messages 一起存,聊几十轮就能
+   * 让一次落盘有几十兆,把 IndexedDB 的配额吃紧。它的价值在当下那一轮,
+   * 刷新页面之后丢掉是可以接受的。
    */
   reasoning?: string;
   /** 这条消息触发了哪些工具,用于在对话流里显示可点击的 artifact 引用。 */
@@ -167,7 +168,6 @@ interface PersistedShape {
   settings: Settings;
   sessions: Record<string, SessionData>;
   activeSessionId: string;
-  legacyImported: boolean;
 }
 
 const uid = () =>
@@ -279,37 +279,6 @@ function moveAwayFrom(
   };
 }
 
-/** 旧版本(localStorage 时代)的数据。读 localStorage 是同步的,所以导入也是。 */
-const LEGACY_KEY = 'mathesis.session';
-
-function readLegacySession(): SessionData | null {
-  // node 里(测试脚本)根本没有 localStorage,那不是"导入失败",别当成异常报出来
-  if (typeof localStorage === 'undefined') return null;
-  try {
-    const raw = localStorage.getItem(LEGACY_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as { state?: Record<string, unknown> };
-    const st = parsed?.state;
-    if (!st || !Array.isArray(st.artifacts)) return null;
-    const id = uid();
-    const now = Date.now();
-    return {
-      id,
-      title: '我的学习',
-      createdAt: now,
-      updatedAt: now,
-      archived: false,
-      artifacts: st.artifacts as CanvasArtifact[],
-      runtime: (st.runtime as SessionData['runtime']) ?? {},
-      interactions: (st.interactions as SessionData['interactions']) ?? {},
-      messages: (st.messages as SessionData['messages']) ?? [],
-    };
-  } catch (e) {
-    console.warn('[mathesis] 旧数据导入失败,当作没有旧数据', e);
-    return null;
-  }
-}
-
 interface SessionState {
   settings: Settings;
 
@@ -317,13 +286,6 @@ interface SessionState {
   /** 已提交的会话快照。当前会话的活工作集在下面那些扁平字段里。 */
   sessions: Record<string, SessionData>;
   activeSessionId: string;
-  /**
-   * 旧的 localStorage 数据是否已尝试导入。
-   *
-   * 必须**落盘**:否则用户删光会话之后,下次载入又会把已经删掉的旧数据"复活"。
-   * 没找到旧数据时也要置 true,免得每次载入都扫一遍。
-   */
-  legacyImported: boolean;
   /** 水合是否完成。异步存储下首帧是空的,界面要等这个。 */
   hydrated: boolean;
   /** 实际落在哪一级存储。memory 表示内容不会被保存,界面必须说出来。 */
@@ -337,7 +299,7 @@ interface SessionState {
   deleteSession: (id: string) => void;
   /** 把活工作集提交进 `sessions[activeSessionId]`。切会话和落盘前都要调。 */
   commitActive: () => void;
-  /** 水合收尾:导入旧数据、保证至少有一个可用会话、置 hydrated。 */
+  /** 水合收尾:保证至少有一个可用会话、置 hydrated。 */
   finishHydration: (tier: StorageTier) => void;
 
   // —— 当前会话的活工作集 ——
@@ -412,7 +374,6 @@ export const useSession = create<SessionState>()(
       settings: DEFAULT_SETTINGS,
       sessions: { [FIRST_SESSION.id]: FIRST_SESSION },
       activeSessionId: FIRST_SESSION.id,
-      legacyImported: false,
       hydrated: false,
       storageTier: 'memory' as StorageTier,
       artifacts: [],
@@ -489,30 +450,11 @@ export const useSession = create<SessionState>()(
         }),
 
       finishHydration: (tier) =>
-        set((s) => {
-          let sessions = s.sessions;
-          let legacyImported = s.legacyImported;
-
-          // 旧数据导入。读 localStorage 是同步的,所以这里不需要异步 ——
-          // 而 zustand 的后置水合回调**不会被 await**,在里面 await 会造出
-          // 两个互相打架的 hydrated。
-          if (!legacyImported) {
-            legacyImported = true;
-            const legacy = readLegacySession();
-            // 只在存档确实是空的时候导入。已经用过多会话的用户不该被塞进一段旧数据。
-            if (legacy && Object.keys(sessions).length === 0) {
-              sessions = { ...sessions, [legacy.id]: legacy };
-            }
-          }
-
-          return {
-            sessions,
-            legacyImported,
-            hydrated: true,
-            storageTier: tier,
-            ...activate(sessions, s.activeSessionId),
-          };
-        }),
+        set((s) => ({
+          hydrated: true,
+          storageTier: tier,
+          ...activate(s.sessions, s.activeSessionId),
+        })),
 
       /**
        * 清空当前会话的**对话**,不动画布。
@@ -635,7 +577,6 @@ export const useSession = create<SessionState>()(
         settings: s.settings,
         sessions: { ...s.sessions, [s.activeSessionId]: snapshot(s) },
         activeSessionId: s.activeSessionId,
-        legacyImported: s.legacyImported,
       }),
       /**
        * 载入:把存档拆回"活工作集 + 会话记录"两种表示。
@@ -656,9 +597,6 @@ export const useSession = create<SessionState>()(
           settings: { ...current.settings, ...(p.settings ?? {}) },
           sessions,
           activeSessionId: activeId,
-          // legacyImported 必须从这里恢复:它是"落盘字段",不是易失字段。
-          // 当成易失的重置掉,会导致用户删光会话后旧数据"复活"。
-          legacyImported: p.legacyImported ?? false,
           ...loadInto(active),
           // 易失字段一律取初值,不接受任何残留
           busy: false,

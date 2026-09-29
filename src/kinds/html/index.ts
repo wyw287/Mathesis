@@ -3,7 +3,7 @@
  *
  * 固定 schema 表达不了的需求才走这里(比如"把这张图变成动画")。它跑在
  * iframe sandbox="allow-scripts" 里,**绝不能加 allow-same-origin** ——
- * 两个同时给等于没沙箱,里面的脚本能直接摸到 localStorage 里的 API Key。
+ * 两个同时给等于没沙箱,里面的脚本能直接摸到 IndexedDB 里的 API Key。
  *
  * 这个 kind **没有工具**:给了它一等公民的入口,模型会当成常规选项来用。
  * 而降级路径(文本块)下模型仍然可以产出它 —— 逃生舱口只在正门走不通时才用。

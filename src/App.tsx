@@ -61,7 +61,7 @@ export function App() {
         {storageTier === 'memory' && (
           // 说清楚,而不是默默降级 —— 用户以为在被保存、结果丢了一整段学习记录,
           // 是比"存不了"严重得多的失败。
-          <span className="storage-warn" title="IndexedDB 和 localStorage 都不可用(可能开了无痕模式)">
+          <span className="storage-warn" title="IndexedDB 不可用(可能开了无痕模式,或被别的标签页占住)">
             存储不可用,本次内容不会被保存
           </span>
         )}

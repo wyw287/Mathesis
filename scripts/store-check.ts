@@ -49,7 +49,6 @@ function resetStore() {
   useSession.setState({
     sessions: { 'sess-a': a, 'sess-b': b },
     activeSessionId: 'sess-a',
-    legacyImported: true, // 默认跳过旧数据导入,需要测它的用例单独打开
     hydrated: true,
     artifacts: [],
     runtime: {},
@@ -189,42 +188,6 @@ async function main() {
     ok('两端空白被去掉', store().sessions['sess-a'].title === '极限的定义', store().sessions['sess-a'].title);
     store().renameSession('sess-a', '   ');
     ok('空标题被忽略,不会把名字弄没', store().sessions['sess-a'].title === '极限的定义');
-  }
-
-  console.log('\n旧数据导入');
-
-  {
-    // 旧版本的存档形状:扁平字段 + 旧的 key
-    const legacy = {
-      state: {
-        artifacts: [{ id: 'old-1', spec: PLOT, rev: 1, schemaVersion: 1, origin: 'ai', title: '旧的图', createdAt: 1, updatedAt: 1 }],
-        messages: [{ id: 'm1', role: 'user', content: '旧的消息', createdAt: 1 }],
-      },
-    };
-    const data = new Map<string, string>([['mathesis.session', JSON.stringify(legacy)]]);
-    (globalThis as any).localStorage = {
-      getItem: (k: string) => data.get(k) ?? null,
-      setItem: () => {},
-      removeItem: () => {},
-    };
-
-    resetStore();
-    useSession.setState({ sessions: {}, legacyImported: false });
-    store().finishHydration('localstorage');
-
-    const ids = Object.keys(store().sessions);
-    ok('导入出了一个会话', ids.length === 1, JSON.stringify(ids));
-    ok('画布带过来了', store().artifacts.length === 1, String(store().artifacts.length));
-    ok('消息带过来了', msgs()[0]?.content === '旧的消息', msgs()[0]?.content);
-    ok('标记为已导入', store().legacyImported === true);
-
-    // 再跑一次不能重复导入 —— 否则用户删光会话后旧数据会"复活"
-    store().deleteSession(store().activeSessionId);
-    ok('删光之后只剩一个新建的空会话', Object.keys(store().sessions).length === 1);
-    store().finishHydration('localstorage');
-    ok('重复水合不会把旧数据再导一遍', store().artifacts.length === 0, String(store().artifacts.length));
-
-    delete (globalThis as any).localStorage;
   }
 
   console.log('\n清空对话只清当前会话的对话');

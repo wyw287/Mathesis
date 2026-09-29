@@ -11,7 +11,7 @@ interface Props {
  * Tier 2 逃生舱口:模型直接生成 HTML。
  *
  * sandbox 只给 allow-scripts,**绝不能加 allow-same-origin** ——
- * 两者同时给等于没有沙箱,iframe 里的脚本能直接摸到 localStorage 里的 API Key。
+ * 两者同时给等于没有沙箱,iframe 里的脚本能直接摸到 IndexedDB 里的 API Key。
  * 交互通过 postMessage 回传,约定消息形如 { __mathesis: true, event: {...} }。
  */
 export function HtmlBlock({ spec, artifactId, emit }: Props) {

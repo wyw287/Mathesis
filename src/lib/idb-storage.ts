@@ -1,5 +1,5 @@
 /**
- * zustand persist 的存储后端:IndexedDB,带写入合并和三级降级。
+ * zustand persist 的存储后端:IndexedDB,带写入合并,不可用时降级到内存。
  *
  * 这个文件解决两个不显眼但会致命的问题。
  *
@@ -12,8 +12,11 @@
  * 所以这两件事都推到 flush 时刻:窗口内的中间态只登记对象引用,不序列化。
  *
  * **二、静默丢数据。** 直接退到内存意味着用户聊了一小时、刷新全没、毫无提示。
- * 所以是三级降级(IDB → localStorage → 内存),并且把落在哪一级**暴露出去**,
- * 让界面能说清楚"当前内容不会被保存"。
+ * 所以把落在哪一级**暴露出去**,让界面能说清楚"当前内容不会被保存"。
+ *
+ * 曾经还有过第三级(localStorage),删掉了:它只在 IndexedDB 不可用时才生效,
+ * 而那种情况下浏览器通常连 localStorage 也不给(无痕模式),真正起作用的
+ * 只有内存那一级 —— 多一级只是多一套要单独测、单独想清楚键冲突的后端。
  */
 import type { PersistStorage, StorageValue } from 'zustand/middleware';
 
@@ -24,7 +27,7 @@ const DB_VERSION = 1;
 /** 写入合并窗口。流式回复一秒能产生几十次 setState,合并掉绝大多数。 */
 const FLUSH_DELAY_MS = 400;
 
-export type StorageTier = 'indexeddb' | 'localstorage' | 'memory';
+export type StorageTier = 'indexeddb' | 'memory';
 
 export interface PersistStorageHandle<S> extends PersistStorage<S> {
   /** 实际落在哪一级存储。界面据此决定要不要提示"不会被保存"。 */
@@ -50,33 +53,6 @@ function memoryBackend(): Backend {
     },
     remove: async (k) => {
       m.delete(k);
-    },
-  };
-}
-
-/**
- * localStorage 在 Safari 隐私模式下**存在但 setItem 会抛**。
- * 所以不能只看它是否存在,要真的写一次才知道能不能用。
- */
-function localStorageUsable(): boolean {
-  try {
-    const probe = '__mathesis_probe__';
-    localStorage.setItem(probe, '1');
-    localStorage.removeItem(probe);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function localStorageBackend(): Backend {
-  return {
-    get: async (k) => localStorage.getItem(k),
-    set: async (k, v) => {
-      localStorage.setItem(k, v);
-    },
-    remove: async (k) => {
-      localStorage.removeItem(k);
     },
   };
 }
@@ -146,12 +122,8 @@ export function createPersistStorage<S>(): PersistStorageHandle<S> {
         void navigator.storage?.persist?.().catch(() => {});
         return idbBackend(db);
       } catch (e) {
-        console.warn('[mathesis] IndexedDB 不可用,退到 localStorage', e);
+        console.warn('[mathesis] IndexedDB 不可用,退到内存', e);
       }
-    }
-    if (typeof localStorage !== 'undefined' && localStorageUsable()) {
-      tier = 'localstorage';
-      return localStorageBackend();
     }
     // 走到这里说明内容**不会**被保存。tier() 会告诉界面,由它明确提示用户,
     // 不能默默降级 —— 那等于让用户以为自己在被保存。
