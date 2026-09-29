@@ -240,6 +240,33 @@ async function main() {
     ok('画布不受影响', store().artifacts.length === 1, String(store().artifacts.length));
   }
 
+  console.log('\n清空对话不该丢掉画布上的操作记录');
+
+  {
+    // pendingEvents 装的是**画布上的操作**(删了一张卡、拖过滑块),不是对话内容。
+    // 清空对话并不会撤销那些操作,所以记录也不该跟着消失 ——
+    // 否则"删掉一张卡、清空对话、再提问"这条路径上,模型会以为那张卡从没存在过。
+    resetStore();
+    store().addArtifact(PLOT, 'y = x', 'ai');
+    store().pushEvent({ type: 'remove', artifactId: store().artifacts[0].id, title: 'y = x' });
+    store().pushMessage({ role: 'user', content: '问题' });
+
+    store().clearConversation();
+
+    ok('消息清空了', msgs().length === 0);
+    ok('操作记录保留下来', store().pendingEvents.length === 1, String(store().pendingEvents.length));
+    ok('保留的正是那条删除', store().pendingEvents[0].type === 'remove');
+  }
+
+  {
+    // 拖滑块也一样
+    resetStore();
+    store().addArtifact(PLOT, 'y = x', 'ai');
+    store().pushEvent({ type: 'paramChange', artifactId: store().artifacts[0].id, param: 'a', value: 2 });
+    store().clearConversation();
+    ok('滑块操作也保留', store().pendingEvents.length === 1, String(store().pendingEvents.length));
+  }
+
   console.log(`\n${pass} 通过, ${fail} 失败\n`);
   process.exit(fail ? 1 : 0);
 }

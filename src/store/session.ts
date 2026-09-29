@@ -514,8 +514,18 @@ export const useSession = create<SessionState>()(
           };
         }),
 
-      clearConversation: () =>
-        set(() => ({ messages: [], apiHistory: [], pendingEvents: [] })),
+      /**
+       * 清空当前会话的**对话**,不动画布。
+       *
+       * `pendingEvents` 刻意**不在这里清**。它装的是**画布上的操作**(删了一张卡、
+       * 拖过滑块),不是对话内容 —— 清空对话并不会撤销那些操作,所以它们的记录
+       * 也不该跟着消失。
+       *
+       * 之前把它一起清掉了,后果是:删掉一张卡片、再清空对话、然后提问,
+       * 那条"删掉了「xxx」"就没了,模型只看到画布上少了一项,
+       * 分不清"被删了"和"从没存在过" —— 而这正是加 remove 事件要堵的洞。
+       */
+      clearConversation: () => set(() => ({ messages: [], apiHistory: [] })),
 
       setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
 
