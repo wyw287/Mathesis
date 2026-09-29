@@ -13,6 +13,7 @@ export function App() {
   const busy = useSession((s) => s.busy);
   const storageTier = useSession((s) => s.storageTier);
   const contextTokens = useSession((s) => s.contextTokens);
+  const hasArtifacts = useSession((s) => s.artifacts.length > 0);
 
   /**
    * 把载入的数据对齐到当前这份代码:跑 schema 迁移 + 重算标题。
@@ -53,6 +54,7 @@ export function App() {
   }
 
   const clearChat = () => useSession.getState().clearConversation();
+  const clearCanvas = () => useSession.getState().clearCanvas();
 
   return (
     <div className="app">
@@ -83,6 +85,15 @@ export function App() {
         <div className="spacer" />
         <button className="ghost-btn" onClick={clearChat} disabled={busy}>
           清空对话
+        </button>
+        <button
+          className="ghost-btn"
+          onClick={clearCanvas}
+          // 画布本来就空的时候没什么可清的 —— 灰掉比点了没反应清楚
+          disabled={busy || !hasArtifacts}
+          title="把画布上的东西全删掉。对话不动。"
+        >
+          清空画布
         </button>
         <button className={configured ? 'ghost-btn' : 'primary-btn'} onClick={() => setShowSettings(true)}>
           {configured ? '设置' : '先填 API Key'}

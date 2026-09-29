@@ -413,6 +413,8 @@ interface SessionState {
   drainEvents: () => CanvasEvent[];
   /** 清空**当前会话**的对话,不动画布。会话本身还在。 */
   clearConversation: () => void;
+  /** 清空**当前会话**的画布,不动对话。见实现里那段:事件必须发出去。 */
+  clearCanvas: () => void;
 }
 
 const DEFAULT_SETTINGS: Settings = {
@@ -574,6 +576,35 @@ export const useSession = create<SessionState>()(
         set(() => ({ messages: [], apiHistory: [] }));
         void deleteImages(dropped);
       },
+
+      /**
+       * 清空画布。对话不动 —— 学生可能只是想重新开始画,而不是把刚讲过的内容丢掉。
+       *
+       * **每一张图都要发一条 `remove` 事件**,这是这个动作里唯一不显然的地方。
+       * 不发的话,模型下一轮只看到画布空了,分不清"被清掉了"和"从没存在过" ——
+       * 而那正是当初加 `remove` 事件要堵的洞。界面上一张一张删也是这么做的
+       * (见 ArtifactCard 的 remove),这里只是批量版。
+       *
+       * `runtime` / `interactions` 一起清:它们按 artifact id 索引,画布空了
+       * 就再没有东西能引用它们,留着只会随会话无限增长。
+       *
+       * 图片**不动** —— 像素属于消息,不属于画布。
+       */
+      clearCanvas: () =>
+        set((s) => {
+          const removals: CanvasEvent[] = s.artifacts.map((a) => ({
+            type: 'remove',
+            artifactId: a.id,
+            title: a.title,
+          }));
+          return {
+            artifacts: [],
+            runtime: {},
+            interactions: {},
+            focusId: undefined,
+            pendingEvents: [...s.pendingEvents, ...removals],
+          };
+        }),
 
       setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
 

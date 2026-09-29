@@ -324,6 +324,43 @@ async function main() {
     ok('滑块操作也保留', store().pendingEvents.length === 1, String(store().pendingEvents.length));
   }
 
+  console.log('\n清空画布 —— 和清空对话正好是一对');
+
+  {
+    resetStore();
+    store().addArtifact(PLOT, 'y = x', 'ai');
+    store().addArtifact(PLOT, 'y = x²', 'ai');
+    const ids = store().artifacts.map((a) => a.id);
+    store().setParam(ids[0], 'k', 3);
+    store().pushEvent({ type: 'paramChange', artifactId: ids[0], param: 'k', value: 3 });
+    store().pushMessage({ role: 'user', content: '这段对话要留着' });
+    store().drainEvents(); // 只看 clearCanvas 自己发了什么
+
+    store().clearCanvas();
+
+    ok('画布空了', store().artifacts.length === 0, String(store().artifacts.length));
+    ok('focusId 也清掉了', store().focusId === undefined);
+    ok('滑块的运行值清掉了', Object.keys(store().runtime).length === 0, JSON.stringify(store().runtime));
+    ok('交互记录清掉了(它按 artifact id 索引,留着只会无限增长)', Object.keys(store().interactions).length === 0);
+
+    // 这条是这个动作里唯一不显然的地方:不发事件的话,模型下一轮只看到画布空了,
+    // 分不清"被清掉了"和"从没存在过"。
+    const evs = store().drainEvents();
+    const removes = evs.filter((e) => e.type === 'remove');
+    ok('每张图都发了一条删除事件', removes.length === 2 && evs.length === 2, JSON.stringify(evs.map((e) => e.type)));
+    ok('事件里带着标题(读到时 artifact 已经不在画布上了)', removes.every((e) => !!e.title), JSON.stringify(removes));
+
+    ok('对话没被动', msgs().length === 1 && msgs()[0].content === '这段对话要留着');
+  }
+
+  {
+    // 反过来也要成立:清空对话不动画布 —— 两条是各管一半
+    resetStore();
+    store().addArtifact(PLOT, 'y = x', 'ai');
+    store().clearConversation();
+    ok('清空对话之后画布还在', store().artifacts.length === 1, String(store().artifacts.length));
+  }
+
   console.log('\n待写内容能被立刻落盘');
 
   {
