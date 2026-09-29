@@ -216,3 +216,74 @@ export async function verifyStep(req: VerifyRequest): Promise<Verdict> {
   }
   return { status: 'unconfirmed', note: 'CAS 化简不出等价,而且有效抽样点太少,核对不了' };
 }
+
+/**
+ * 核对一步的超时上限。
+ *
+ * 实测正常步骤 2–130ms,所以 5 秒是四十倍余量。而病态输入是**没有上界**的
+ * —— `expand((x+y+z)^40)` 一项就超过 12 秒。这个值不是"期望耗时",是
+ * "再等下去也没意义"的分界。
+ */
+export const CAS_TIMEOUT_MS = 5000;
+
+/**
+ * 带超时的核对。**组件应该用这个,不要直接用 `verifyStep`。**
+ *
+ * 直接调 `verifyStep` 意味着运算跑在主线程上,而 nerdamer 的 `expand`/`simplify`
+ * 是同步且没有上界的(见 cas-worker 的注释)。病态输入会把整个标签页冻死,
+ * 用户只能强杀。所以正规路径是丢给 Worker,超时就把线程一起丢掉。
+ *
+ * 超时之后**不返回空白**:数值抽查仍然能跑(几毫秒),它算不出等价,
+ * 但**能证伪** —— 那恰恰是最有价值的那个结论。
+ *
+ * node 里没有 Worker,会退回主线程直算。测试脚本走的正是这条路。
+ */
+export async function verifyStepSafe(
+  req: VerifyRequest,
+  timeoutMs = CAS_TIMEOUT_MS,
+): Promise<Verdict> {
+  const client = await loadWorkerClient();
+  if (!client) return verifyStep(req);
+
+  const verdict = await client.runInWorker(req, timeoutMs);
+  if (verdict) return verdict;
+  return verifyWithoutCas(req, timeoutMs);
+}
+
+/** 没有 Worker 时拉不到 —— 动态 import 让 node 里根本走不到这一支。 */
+async function loadWorkerClient(): Promise<typeof import('./cas-client') | null> {
+  if (typeof Worker === 'undefined') return null;
+  try {
+    return await import('./cas-client');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 符号核对超时后的降级:只剩得动数值抽查。
+ *
+ * 导出的目的是它能被单独测 —— 这是 worker 出问题时的兜底路径,
+ * 平时跑不到,只有真出事的时候才用得上。**平时跑不到的代码最需要测试。**
+ */
+export function verifyWithoutCas(req: VerifyRequest, timeoutMs: number): Verdict {
+  const secs = Math.round(timeoutMs / 1000);
+  if (req.relation === 'derivativeOf') {
+    return {
+      status: 'unavailable',
+      note: `符号核对超过 ${secs} 秒,已放弃 —— 表达式太复杂,而且求导那一步没法退到数值核对`,
+    };
+  }
+  const vars = req.vars?.length ? req.vars : ['x'];
+  const agrees = numericAgrees(req.expr, req.against, vars);
+  if (agrees === false) {
+    return {
+      status: 'differs',
+      note: `符号核对超过 ${secs} 秒已放弃,但**数值抽查算出不一致** —— 这一步有问题`,
+    };
+  }
+  if (agrees === true) {
+    return { status: 'unconfirmed', note: `符号核对超过 ${secs} 秒已放弃,数值抽查一致（弱证据,不是证明）` };
+  }
+  return { status: 'unavailable', note: `符号核对超过 ${secs} 秒已放弃,而且抽样也没能核对` };
+}

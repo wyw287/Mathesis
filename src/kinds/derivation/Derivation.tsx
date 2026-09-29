@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { verifyStep, type Verdict, type VerifyStatus } from '../../lib/cas';
+import { verifyStepSafe, type Verdict, type VerifyStatus } from '../../lib/cas';
 import type { CanvasEvent, DerivationSpec, DerivationStep, GapKind, StepCheck } from '../../types/artifact';
 import { Latex } from '../../renderers/Latex';
 import { Markdown, MathBlock } from '../../renderers/Markdown';
@@ -55,7 +55,9 @@ async function verifyOne(steps: DerivationStep[], step: DerivationStep): Promise
     };
   }
   try {
-    return await verifyStep({
+    // verifyStepSafe 而不是 verifyStep:后者会把无上界的同步运算跑在主线程上,
+    // 病态输入能冻住整个标签页。前者丢给 Worker,超时就放弃并降级到数值抽查。
+    return await verifyStepSafe({
       expr: check.expr,
       against,
       relation: check.relation,

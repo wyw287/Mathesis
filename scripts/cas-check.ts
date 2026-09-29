@@ -8,7 +8,7 @@
  *
  * 运行:npm run check:cas
  */
-import { numericAgrees, verifyStep } from '../src/lib/cas';
+import { numericAgrees, verifyStep, verifyStepSafe, verifyWithoutCas } from '../src/lib/cas';
 
 let pass = 0;
 let fail = 0;
@@ -124,6 +124,43 @@ async function main() {
     // 这里额外确认它确实是绕道走的(耗时属于 simplify 的量级)。
     const v = await verifyStep({ expr: '2*sin(x)*cos(x)', against: 'sin(2*x)' });
     ok('含超越函数时不走捷径,结论仍然正确', v.status === 'unconfirmed', `${v.status}: ${v.note}`);
+  }
+
+  console.log('\n超时之后的降级路径(平时跑不到,出事才用得上)');
+
+  {
+    // 符号核对因为病态输入超时了。此时还能做一件便宜的事:数值抽查。
+    // 它算不出等价,但**能证伪** —— 而那恰恰是最有价值的那个结论。
+    const v = verifyWithoutCas({ expr: 'x^3', against: 'x^2' }, 5000);
+    ok('超时后仍能算出"不等"', v.status === 'differs', `${v.status}: ${v.note}`);
+    ok('说明里点明是超时之后降级判的,不是符号核对判的', /超过 5 秒/.test(v.note), v.note);
+  }
+
+  {
+    const v = verifyWithoutCas({ expr: 'x^2+2*x+1', against: '(x+1)^2' }, 5000);
+    ok('超时且数值一致时判"不确定",不冒充"已核对"', v.status === 'unconfirmed', `${v.status}: ${v.note}`);
+    ok('并且说明这是弱证据', /弱证据/.test(v.note), v.note);
+  }
+
+  {
+    // 求导那一步没法退到数值核对 —— 目标的导数还没算出来
+    const v = verifyWithoutCas({ expr: '2*x', against: 'x^2', relation: 'derivativeOf' }, 5000);
+    ok('求导关系超时后如实说"核对不了"', v.status === 'unavailable', `${v.status}: ${v.note}`);
+    ok('并且说明了为什么退不了', /没法退到数值/.test(v.note), v.note);
+  }
+
+  {
+    // 抽样也核不了(比如式子里含 CAS 命令),不能冒充成"通过"
+    const v = verifyWithoutCas({ expr: 'integrate(x^2,x)', against: 'x^3/3' }, 5000);
+    ok('抽样核不了时说核不了,不冒充通过', v.status === 'unavailable', `${v.status}: ${v.note}`);
+  }
+
+  console.log('\n没有 Worker 的环境走直算(node 就是这一种)');
+
+  {
+    // verifyStepSafe 在 node 里应当退回主线程直算,行为和 verifyStep 一致
+    const v = await verifyStepSafe({ expr: 'x^2+2*x+1', against: '(x+1)^2' });
+    ok('无 Worker 时仍然得到正确结论', v.status === 'confirmed', `${v.status}: ${v.note}`);
   }
 
   console.log(`\n${pass} 通过, ${fail} 失败\n`);
