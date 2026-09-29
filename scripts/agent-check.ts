@@ -10,7 +10,12 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { useSession } from '../src/store/session';
-import { send } from '../src/llm/agent';
+import { ensureSystemMessage, send } from '../src/llm/agent';
+import { putImage } from '../src/lib/blob-store';
+import { installIndexedDB } from './fake-idb';
+
+const PIXELS = 'data:image/png;base64,iVBORw0KGgo=';
+const img = (id: string) => ({ id, w: 10, h: 10, mime: 'image/png', bytes: 4 });
 
 let pass = 0;
 let fail = 0;
@@ -348,6 +353,89 @@ async function main() {
     // 关键:我们自己仍然按**原始字符串**解析,所以模型拿到的还是有信息量的那条错误。
     // 如果这里也用了替换后的 {},模型只会看到"缺 view"之类,不知道是自己 JSON 写坏了。
     ok('模型仍被告知是 JSON 写坏了,而不是字段缺失', /不是合法 JSON/.test(toolMsg?.content ?? ''), String(toolMsg?.content).slice(0, 60));
+    s.close();
+  }
+
+  console.log('\n图片:发给模型的是 content 数组');
+
+  {
+    const s = await serve([{ content: '我看到了这张图', finish: 'stop' }]);
+    const idb = installIndexedDB();
+    await putImage('img-1', PIXELS);
+    await reset(s.url);
+    useSession.getState().setSettings({ visionEnabled: true });
+
+    await send({ text: '这道题怎么做', images: [img('img-1')] });
+
+    const last = (s.requests[0] as any).messages.at(-1);
+    ok('最后一条的 content 是数组', Array.isArray(last?.content), JSON.stringify(last?.content).slice(0, 80));
+    ok('第一块是文本,而且带着学生的话', last?.content?.[0]?.type === 'text' && String(last.content[0].text).includes('这道题怎么做'), JSON.stringify(last?.content?.[0]).slice(0, 80));
+    // URL 必须是**库里存的那一份**,不是别的东西拼出来的
+    ok('第二块是图片,URL 就是存进去的那份', last?.content?.[1]?.type === 'image_url' && last.content[1].image_url.url === PIXELS, JSON.stringify(last?.content?.[1]).slice(0, 80));
+    ok('展示消息里也带着引用', messages()[0]?.images?.[0]?.id === 'img-1', JSON.stringify(messages()[0]?.images));
+    idb.uninstall();
+    s.close();
+  }
+
+  {
+    // 只发图不打字。此前有两处闸门会让它根本发不出去:
+    // send 里的空消息判断,和输入框按钮的 disabled。
+    const s = await serve([{ content: '收到', finish: 'stop' }]);
+    const idb = installIndexedDB();
+    await putImage('img-2', PIXELS);
+    await reset(s.url);
+    useSession.getState().setSettings({ visionEnabled: true });
+
+    await send({ images: [img('img-2')] });
+
+    ok('只发图不打字也真的发出去了', (s.requests as unknown[]).length === 1, String((s.requests as unknown[]).length));
+    ok('而且没被标成一次画布操作', messages()[0]?.content === '', JSON.stringify(messages()[0]?.content));
+    const text = (s.requests[0] as any).messages.at(-1)?.content?.[0]?.text ?? '';
+    ok('告诉模型这是"只发了图",别让它去猜画布', String(text).includes('只发了一张图片'), String(text).slice(-60));
+    idb.uninstall();
+    s.close();
+  }
+
+  {
+    // 开关关着:图片存下来了,但不发。沉默是不行的 ——
+    // 模型会对着"这道题怎么做"硬答,或者假装自己看见了图。
+    const s = await serve([{ content: '我看不到图片', finish: 'stop' }]);
+    const idb = installIndexedDB();
+    await putImage('img-3', PIXELS);
+    await reset(s.url);
+    useSession.getState().setSettings({ visionEnabled: false });
+
+    await send({ text: '这道题怎么做', images: [img('img-3')] });
+
+    ok('关着的时候一个 image_url 都不发', !JSON.stringify(s.requests[0]).includes('image_url'));
+    const last = (s.requests[0] as any).messages.at(-1);
+    ok('但明确说了它看不到', typeof last?.content === 'string' && last.content.includes('你看不到'), String(last?.content).slice(-80));
+    ok('图片本身仍然留在消息里(没被丢掉)', messages()[0]?.images?.[0]?.id === 'img-3');
+    idb.uninstall();
+    s.close();
+  }
+
+  {
+    // 刷新之后:apiHistory 是不落盘的,重建时图片必须从 blob 库重新拼回来。
+    // 这是"图片必须挂在 ChatMessage 上"那条设计的验收点。
+    const s = await serve([{ content: '好', finish: 'stop' }]);
+    const idb = installIndexedDB();
+    await putImage('img-4', PIXELS);
+    await reset(s.url);
+    useSession.getState().setSettings({ visionEnabled: true });
+
+    await send({ text: '第一轮', images: [img('img-4')] });
+
+    useSession.setState({ apiHistory: [] }); // 模拟一次载入
+    await ensureSystemMessage();
+
+    const rebuilt = (useSession.getState().apiHistory as any[]).find((m) => m.role === 'user');
+    ok('重建之后图片又挂回去了', Array.isArray(rebuilt?.content) && rebuilt.content.some((p: any) => p.type === 'image_url' && p.image_url.url === PIXELS), JSON.stringify(rebuilt?.content).slice(0, 100));
+    // 关键的一点:重建用的是消息原本的 content,不能再过一遍 composeUserContent,
+    // 否则画布目录和"学生说:"会被重复注入进历史
+    const textBlock = rebuilt?.content?.find((p: any) => p.type === 'text')?.text ?? '';
+    ok('没有把这一轮的话重复注入一遍', !String(textBlock).includes('学生说：'), String(textBlock).slice(0, 80));
+    idb.uninstall();
     s.close();
   }
 

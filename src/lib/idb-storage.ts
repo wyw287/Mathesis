@@ -17,12 +17,11 @@
  * 曾经还有过第三级(localStorage),删掉了:它只在 IndexedDB 不可用时才生效,
  * 而那种情况下浏览器通常连 localStorage 也不给(无痕模式),真正起作用的
  * 只有内存那一级 —— 多一级只是多一套要单独测、单独想清楚键冲突的后端。
+ *
+ * 连接、事务原语和降级后端都在 `lib/idb.ts`,和图片存储共用。
  */
 import type { PersistStorage, StorageValue } from 'zustand/middleware';
-
-const DB_NAME = 'mathesis';
-const STORE = 'kv';
-const DB_VERSION = 1;
+import { KV_STORE, idbBackend, memoryBackend, openDb, type Backend } from './idb';
 
 /** 写入合并窗口。流式回复一秒能产生几十次 setState,合并掉绝大多数。 */
 const FLUSH_DELAY_MS = 400;
@@ -34,76 +33,6 @@ export interface PersistStorageHandle<S> extends PersistStorage<S> {
   tier: () => StorageTier;
   /** 立刻落盘。页面隐藏、以及每次请求结束时都要调 —— 合并窗口内的内容不能丢。 */
   flush: () => Promise<void>;
-}
-
-// ------------------------------------------------------------------ 后端
-
-interface Backend {
-  get: (key: string) => Promise<string | null>;
-  set: (key: string, value: string) => Promise<void>;
-  remove: (key: string) => Promise<void>;
-}
-
-function memoryBackend(): Backend {
-  const m = new Map<string, string>();
-  return {
-    get: async (k) => m.get(k) ?? null,
-    set: async (k, v) => {
-      m.set(k, v);
-    },
-    remove: async (k) => {
-      m.delete(k);
-    },
-  };
-}
-
-function req<T>(r: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    r.onsuccess = () => resolve(r.result);
-    r.onerror = () => reject(r.error ?? new Error('IndexedDB 请求失败'));
-  });
-}
-
-/** 等事务真正提交。只等 put 的 request 成功是不够的 —— 页面紧接着关闭时可能没落盘。 */
-function txDone(tx: IDBTransaction): Promise<void> {
-  return new Promise((resolve, reject) => {
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error ?? new Error('IndexedDB 事务失败'));
-    tx.onabort = () => reject(tx.error ?? new Error('IndexedDB 事务中止'));
-  });
-}
-
-function openDb(): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const r = indexedDB.open(DB_NAME, DB_VERSION);
-    r.onupgradeneeded = () => {
-      if (!r.result.objectStoreNames.contains(STORE)) r.result.createObjectStore(STORE);
-    };
-    r.onsuccess = () => resolve(r.result);
-    r.onerror = () => reject(r.error ?? new Error('IndexedDB 打开失败'));
-    // 另一个标签页正开着旧版本时会被阻塞。宁可降级,也不要无限等。
-    r.onblocked = () => reject(new Error('IndexedDB 被另一个标签页占用'));
-  });
-}
-
-function idbBackend(db: IDBDatabase): Backend {
-  return {
-    get: async (key) => {
-      const tx = db.transaction(STORE, 'readonly');
-      const v = await req(tx.objectStore(STORE).get(key));
-      return typeof v === 'string' ? v : null;
-    },
-    set: async (key, value) => {
-      const tx = db.transaction(STORE, 'readwrite');
-      await req(tx.objectStore(STORE).put(value, key));
-      await txDone(tx);
-    },
-    remove: async (key) => {
-      const tx = db.transaction(STORE, 'readwrite');
-      await req(tx.objectStore(STORE).delete(key));
-      await txDone(tx);
-    },
-  };
 }
 
 // ------------------------------------------------------------------ 主体
@@ -120,7 +49,7 @@ export function createPersistStorage<S>(): PersistStorageHandle<S> {
         // 申请持久化存储。否则浏览器在存储压力下会驱逐 IndexedDB ——
         // 而这是用户唯一的一份学习记录。
         void navigator.storage?.persist?.().catch(() => {});
-        return idbBackend(db);
+        return idbBackend(db, KV_STORE);
       } catch (e) {
         console.warn('[mathesis] IndexedDB 不可用,退到内存', e);
       }

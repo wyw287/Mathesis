@@ -191,6 +191,31 @@ button {
   background: rgba(0, 0, 0, 0.06);
 }
 
+/* 学生贴进来的图片。`.msg-user` 带着 pre-wrap,所以图片要自己成块,
+   否则缩略图之间的换行会渲染成一片空白。 */
+.msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.msg-image {
+  display: block;
+  max-height: 240px;
+  max-width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+}
+
+.msg-image-lost {
+  font-size: 12.5px;
+  color: var(--faint);
+  border: 1px dashed var(--border-strong);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
 .status-line {
   flex: none;
   display: flex;
@@ -339,10 +364,67 @@ button {
 .composer {
   flex: none;
   display: flex;
+  flex-direction: column;
   gap: 8px;
-  align-items: flex-end;
   padding: 10px 14px 14px;
   border-top: 1px solid var(--border);
+}
+
+/* 拖拽悬停时的落点提示。用的是和"选中/当前"同一族的颜色,不另起一套。 */
+.composer.drag {
+  background: var(--accent-soft);
+  outline: 1px dashed var(--accent);
+  outline-offset: -6px;
+}
+
+.composer-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+/* 待发送的图片。缩略图直接画内存里的 data URL —— 发送之前的预览不必回库读。 */
+.composer-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.image-chip {
+  position: relative;
+  line-height: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.image-chip img {
+  display: block;
+  height: 64px;
+  max-width: 140px;
+  object-fit: cover;
+}
+
+.image-remove {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  padding: 2px 5px;
+  border: none;
+  border-radius: 5px;
+  background: rgba(28, 27, 25, 0.55);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+.composer-hint {
+  font-size: 12.5px;
+  color: var(--faint);
+}
+
+.attach-btn {
+  padding: 9px 11px;
 }
 
 .composer textarea {

@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import { createPersistStorage, type StorageTier } from '../lib/idb-storage';
+import { deleteImages, sweepImages } from '../lib/blob-store';
 import {
   type ArtifactIndexEntry,
   type ArtifactSpec,
@@ -16,6 +17,16 @@ export interface Settings {
   model: string;
   /** 某些第三方中转不支持 tool calling,关掉后走「模型输出带标记的文本块」降级路径。 */
   toolsEnabled: boolean;
+  /**
+   * 当前模型能不能吃图片。
+   *
+   * **默认关。** 默认预设是 DeepSeek,而不支持视觉的端点收到 `image_url`
+   * 会直接 400 —— 默认开等于"贴一张图就报一次错"。
+   *
+   * 关着的时候图片照样能粘贴、照样存进本地,只是不发给模型(而且会明确告诉模型
+   * 它看不到,免得它装作看见了)。换到支持视觉的模型之后打开即可。
+   */
+  visionEnabled: boolean;
   /**
    * 单次回复的输出上限。null = 不发送这个字段,用服务商自己的默认值。
    *
@@ -55,7 +66,25 @@ export interface ChatMessage {
   reasoning?: string;
   /** 这条消息触发了哪些工具,用于在对话流里显示可点击的 artifact 引用。 */
   artifactIds?: string[];
+  /**
+   * 学生贴进来的图片。
+   *
+   * **这里只放元数据,像素在 `lib/blob-store.ts` 的独立对象存储里。**
+   * 谁把 data URL 塞进这个字段,谁就让每一次落盘(每 400ms 一次,序列化
+   * **整个** state)都要重刷所有历史图片 —— 所以这个字段注定只能是引用。
+   * 它会跟着消息一起落盘,和 `reasoning` 正相反:几百字节,不值当剥。
+   */
+  images?: MessageImage[];
   createdAt: number;
+}
+
+/** 一张图片的引用。像素不在这里 —— 见 `lib/blob-store.ts`。 */
+export interface MessageImage {
+  id: string;
+  w: number;
+  h: number;
+  mime: string;
+  bytes: number;
 }
 
 /**
@@ -279,6 +308,35 @@ function moveAwayFrom(
   };
 }
 
+/** 这批消息引用了哪些图片。 */
+function imageIdsOf(messages: ChatMessage[]): string[] {
+  return messages.flatMap((m) => (m.images ?? []).map((im) => im.id));
+}
+
+/** `referencedImageIds` 只需要状态里的这三项,不必把整个 SessionState 暴露出去。 */
+type ImageRefSource = Pick<SessionState, 'messages' | 'sessions' | 'activeSessionId'>;
+
+/**
+ * 所有**仍然被引用**的图片 id。载入时的全量回收拿它当白名单。
+ *
+ * **当前会话必须取扁平的 `messages`,不能取 `sessions[activeSessionId]`。**
+ * 后者是上次 commit 时拍的快照,自那以后被删掉的图还在里面 ——
+ * 这是「扁平镜像 + 提交」那套结构第三次需要被记住的地方(前两处见
+ * `switchSession` 和 `partialize`)。
+ *
+ * 别的会话一律算数,包括已归档的:归档只是从列表里收起来,内容仍然保留。
+ * 取多的方向是安全的(顶多多留几张),取少的方向会把学生正在看的图删掉。
+ */
+export function referencedImageIds(s: ImageRefSource): Set<string> {
+  const ids = new Set<string>();
+  for (const m of s.messages) for (const im of m.images ?? []) ids.add(im.id);
+  for (const [id, sess] of Object.entries(s.sessions)) {
+    if (id === s.activeSessionId) continue;
+    for (const m of sess.messages) for (const im of m.images ?? []) ids.add(im.id);
+  }
+  return ids;
+}
+
 interface SessionState {
   settings: Settings;
 
@@ -350,6 +408,8 @@ const DEFAULT_SETTINGS: Settings = {
   apiKey: '',
   model: 'deepseek-chat',
   toolsEnabled: true,
+  // 见 Settings.visionEnabled —— 默认关,因为默认预设是文本模型
+  visionEnabled: false,
   // 不发这个字段。见 Settings.maxTokens 的注释 —— 给推理模型设一个偏小的上限
   // 比完全不设更糟,因为它会把思维链一起掐掉。
   maxTokens: null,
@@ -440,21 +500,39 @@ export const useSession = create<SessionState>()(
           };
         }),
 
-      deleteSession: (id) =>
+      deleteSession: (id) => {
+        const before = get();
+        const victim = before.sessions[id];
+        if (!victim) return;
+
+        // 这个会话引用的图要跟着走。当前会话取**扁平 messages** ——
+        // `sessions[activeSessionId]` 是上次 commit 时的快照,自那以后贴的图
+        // 还不在里面,照它删会漏。
+        const dropped = imageIdsOf(id === before.activeSessionId ? before.messages : victim.messages);
+
         set((s) => {
-          if (!s.sessions[id]) return {};
           const sessions = { ...s.sessions };
           delete sessions[id];
           if (id !== s.activeSessionId) return { sessions };
           return { sessions, ...activate(sessions, id) };
-        }),
+        });
 
-      finishHydration: (tier) =>
+        // 精确删除:丢掉的正好就是这些消息引用的图。不做全量扫描 ——
+        // 那会把输入框里还没发送的草稿当成孤儿删掉。
+        void deleteImages(dropped);
+      },
+
+      finishHydration: (tier) => {
         set((s) => ({
           hydrated: true,
           storageTier: tier,
           ...activate(s.sessions, s.activeSessionId),
-        })),
+        }));
+
+        // 兜底:把没人引用的图片清掉。会话内的删除走精确删除,不靠这里 ——
+        // 这一趟收的是跨载入才发现的孤儿(上次操作中途崩了、别的标签页留下的)。
+        void sweepImages(referencedImageIds(get()));
+      },
 
       /**
        * 清空当前会话的**对话**,不动画布。
@@ -467,7 +545,11 @@ export const useSession = create<SessionState>()(
        * 那条"删掉了「xxx」"就没了,模型只看到画布上少了一项,
        * 分不清"被删了"和"从没存在过" —— 而这正是加 remove 事件要堵的洞。
        */
-      clearConversation: () => set(() => ({ messages: [], apiHistory: [] })),
+      clearConversation: () => {
+        const dropped = imageIdsOf(get().messages);
+        set(() => ({ messages: [], apiHistory: [] }));
+        void deleteImages(dropped);
+      },
 
       setSettings: (patch) => set((s) => ({ settings: { ...s.settings, ...patch } })),
 

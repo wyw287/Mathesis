@@ -13,6 +13,8 @@
  * 运行:npm run check:storage
  */
 import { createPersistStorage } from '../src/lib/idb-storage';
+import { BLOB_STORE } from '../src/lib/idb';
+import { installIndexedDB } from './fake-idb';
 
 let pass = 0;
 let fail = 0;
@@ -37,77 +39,6 @@ console.warn = (...args: unknown[]) => {
   realWarn(...args);
 };
 const val = (n: number) => ({ state: { messages: [`分片 ${n}`] }, version: 1 });
-
-/**
- * 造一个 IndexedDB 替身,只实现 idb-storage 用到的那几个方法。
- *
- * 回调必须**异步**触发:产品代码是在拿到 request **之后**才挂 onsuccess 的,
- * 同步触发会让两个 handler 都还是 undefined —— 表现就是 promise 永远不 settle,
- * 整个测试挂死而不是失败。
- */
-function installIndexedDB(opts: { failOpen?: boolean; failWrites?: boolean } = {}) {
-  const data = new Map<string, string>();
-  const writes: string[] = [];
-
-  const makeRequest = (produce: () => void, failWith?: Error) => {
-    const r: any = {};
-    queueMicrotask(() => {
-      if (failWith) {
-        r.error = failWith;
-        r.onerror?.();
-        return;
-      }
-      r.result = produce();
-      r.onsuccess?.();
-    });
-    return r;
-  };
-
-  const store = {
-    get: (k: string) => makeRequest(() => data.get(k) as any),
-    put: (v: string, k: string) => {
-      // 在 put 调用时就记下来 —— 断言关心的是"落了几次",不是事务语义
-      writes.push(v);
-      return makeRequest(
-        () => void data.set(k, v),
-        opts.failWrites ? new Error('写入失败') : undefined,
-      );
-    },
-    delete: (k: string) => makeRequest(() => void data.delete(k)),
-  };
-
-  const db = {
-    // 替身不需要真的建表:openDb 只在首次升级时问这一句
-    objectStoreNames: { contains: () => true },
-    createObjectStore: () => store,
-    transaction: () => {
-      const tx: any = { objectStore: () => store };
-      // 事务提交是宏任务,请求回调是微任务 —— 真实 IDB 也是这个顺序,
-      // 而产品代码要靠它才能在这两者之间把 oncomplete 挂上
-      setTimeout(() => tx.oncomplete?.(), 0);
-      return tx;
-    },
-  };
-
-  (globalThis as any).indexedDB = {
-    open: () => {
-      const r: any = {};
-      queueMicrotask(() => {
-        if (opts.failOpen) {
-          r.error = new Error('打不开');
-          r.onerror?.();
-          return;
-        }
-        r.result = db;
-        r.onupgradeneeded?.();
-        r.onsuccess?.();
-      });
-      return r;
-    },
-  };
-
-  return { writes, data, uninstall: () => void delete (globalThis as any).indexedDB };
-}
 
 /** 数一数 `JSON.stringify` 被调了几次。 */
 function countStringify() {
@@ -261,6 +192,35 @@ async function main() {
     const s = createPersistStorage();
     ok('损坏的存档返回 null 而不是抛错', (await s.getItem('mathesis')) === null);
     uninstall();
+  }
+
+  console.log('\n从 v1 升到 v2 —— 加 blobs 不能碰坏已有的存档');
+
+  {
+    // 用户浏览器里现在就是这个状态:版本 1,只有 kv,里面是他全部的会话。
+    // 升级最坏的结果是"打开就丢数据",而它恰恰是最容易被静默搞砸的一步。
+    const idb = installIndexedDB({
+      existing: { version: 1, seed: { kv: { 'mathesis.session': JSON.stringify(val(42)) } } },
+    });
+    ok('起点确实只有 kv', !idb.stores.has(BLOB_STORE), [...idb.stores.keys()].join(','));
+
+    const s = createPersistStorage();
+    const back = (await s.getItem('mathesis.session')) as any;
+    ok('升级之后旧存档还在', back?.state?.messages?.[0] === '分片 42', JSON.stringify(back));
+    ok('版本升到了 2', idb.version() === 2, String(idb.version()));
+    ok('blobs 被建出来了', idb.stores.has(BLOB_STORE), [...idb.stores.keys()].join(','));
+    idb.uninstall();
+  }
+
+  {
+    // 升级之后写入仍然正常 —— 建新 store 不能把 kv 的连接带坏
+    const idb = installIndexedDB({ existing: { version: 1 } });
+    const s = createPersistStorage();
+    await s.getItem('probe');
+    s.setItem('k', val(7));
+    await s.flush();
+    ok('升级后新的写入照常落进 kv', idb.data.get('k')?.includes('分片 7') === true, String(idb.data.get('k')));
+    idb.uninstall();
   }
 
   console.log(`\n${pass} 通过, ${fail} 失败\n`);

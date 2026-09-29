@@ -6,11 +6,12 @@
  *  2. 工具执行的失败处理 —— 校验错误回给模型让它自己改,而不是白屏
  *  3. 降级 —— 中转不支持 tool calling 时自动切文本模式,并记住这个事实
  */
-import { useSession, type ApiMessage, type InteractionStats } from '../store/session';
+import { useSession, type ApiMessage, type InteractionStats, type MessageImage } from '../store/session';
 import type { CanvasArtifact, CanvasEvent } from '../types/artifact';
 import { TOOLS, toOpenAiTools, toolByName, toolsAsText, type ToolContext } from '../tools';
 import { parseSpec, titleFor } from '../kinds/registry';
 import { ToolInputError } from '../lib/validate';
+import { getDataUrl } from '../lib/blob-store';
 import { LlmError, ToolUnsupportedError, chat, type ChatOutcome, type ToolCall } from './client';
 import { FALLBACK_INSTRUCTION, extractArtifactBlocks, stripArtifactBlocks } from './fallback';
 import { SYSTEM_PROMPT } from './prompt';
@@ -117,12 +118,63 @@ function describeEvent(e: CanvasEvent): string {
   }
 }
 
-/** 组装这一轮实际发给模型的内容。展示给学生的仍是原文。 */
-function composeUserContent(text: string, events: CanvasEvent[]): string {
+/**
+ * 组装这一轮实际发给模型的内容。展示给学生的仍是原文。
+ *
+ * `hasImages` 只影响"没有文字"时那句占位说明 —— 只发了一张图,却告诉模型
+ * "学生只是在画布上操作",它会去猜画布上发生了什么,而学生想问的其实是图。
+ */
+function composeUserContent(text: string, events: CanvasEvent[], hasImages = false): string {
   const blocks = [artifactIndexText()];
   if (events.length) blocks.push(`[学生刚才在画布上的操作]\n${events.map(describeEvent).join('\n')}`);
-  blocks.push(text.trim() ? `学生说：${text.trim()}` : '（学生没有输入文字，只是在画布上操作）');
+  const empty = hasImages ? '（学生只发了一张图片，没有文字）' : '（学生没有输入文字，只是在画布上操作）';
+  blocks.push(text.trim() ? `学生说：${text.trim()}` : empty);
   return blocks.join('\n\n');
+}
+
+type ContentPart =
+  | { type: 'text'; text: string }
+  | { type: 'image_url'; image_url: { url: string } };
+
+/**
+ * 给一段**已经拼好的**文本挂上图片。
+ *
+ * 刻意和 `composeUserContent` 分开:那个负责"这一轮要说的话"(注入画布目录、
+ * 加"学生说:"前缀),这个只管形状。重建历史时用的是消息原本的文本,
+ * 绝不能再过一遍 `composeUserContent` —— 那会把目录和前缀重复注入一遍。
+ *
+ * 没有图片时**原样返回那个字符串**。不是偷懒:绝大多数请求都没有图片,
+ * 而 content 数组在有些中转上走的是另一条代码路径,能不改变形状就不改变。
+ */
+async function attachImages(
+  text: string,
+  images: MessageImage[],
+  visionOn: boolean,
+): Promise<string | ContentPart[]> {
+  if (!images.length) return text;
+
+  if (!visionOn) {
+    // 沉默不行:模型会对着"这道题怎么做"硬答,或者假装自己看见了图。
+    // 明确告诉它看不到,它才会请学生改用文字。
+    return (
+      `${text}\n\n[学生附上了 ${images.length} 张图片,但当前设置里没有开启` +
+      '「当前模型支持图片输入」,你看不到它们。请明确告诉学生你看不到,并请他改用文字描述。]'
+    );
+  }
+
+  const parts: ContentPart[] = [{ type: 'text', text }];
+  let lost = 0;
+  for (const im of images) {
+    const url = await getDataUrl(im.id);
+    // 读不到就跳过。**绝不能拿空 URL 占位** —— 那会被服务端当成坏参数直接 400。
+    if (!url) {
+      lost++;
+      continue;
+    }
+    parts.push({ type: 'image_url', image_url: { url } });
+  }
+  if (lost) parts.push({ type: 'text', text: `[有 ${lost} 张图片已经丢失,读不出来了]` });
+  return parts;
 }
 
 // -------------------------------------------------------------- 工具执行
@@ -396,6 +448,8 @@ export interface SendOptions {
   text?: string;
   /** 由画布事件触发(如「这步不懂」),不是学生打的字 */
   eventDriven?: CanvasEvent[];
+  /** 学生贴进来的图片。像素在 blob 库里,这里只是引用。 */
+  images?: MessageImage[];
   signal?: AbortSignal;
 }
 
@@ -425,7 +479,16 @@ export async function send(opts: SendOptions = {}): Promise<void> {
 
   const events = [...store.drainEvents(), ...(opts.eventDriven ?? [])];
   const text = opts.text ?? '';
-  if (!text.trim() && !events.length) return;
+  const images = opts.images ?? [];
+  if (!text.trim() && !events.length && !images.length) return;
+
+  // **必须在 pushMessage 之前。** 历史为空时它会从展示用的 messages 重建协议历史
+  // (带图片的要从 blob 库重新拼出来),放在 push 之后就会把这一轮新消息重复计一次。
+  //
+  // 放在 send 里而不是让每个调用方自己调,是因为调用方有两个
+  // (Chat 的输入框、ArtifactCard 的「这步不懂」),而后者此前漏了 ——
+  // 那一轮请求根本没有系统提示词。
+  await ensureSystemMessage();
 
   // 展示层只显示学生自己打的字和结构性事件,不显示注入的上下文
   const displayParts: string[] = [];
@@ -433,8 +496,20 @@ export async function send(opts: SendOptions = {}): Promise<void> {
   for (const e of events) {
     if (e.type === 'stepConfused' || e.type === 'answer') displayParts.push(describeEvent(e));
   }
-  store.pushMessage({ role: 'user', content: displayParts.join('\n') || '(画布操作)' });
-  store.pushApi({ role: 'user', content: composeUserContent(text, events) });
+  store.pushMessage({
+    role: 'user',
+    // 只发图不打字是合法的,不能标成一次画布操作
+    content: displayParts.join('\n') || (images.length ? '' : '(画布操作)'),
+    images: images.length ? images : undefined,
+  });
+  store.pushApi({
+    role: 'user',
+    content: await attachImages(
+      composeUserContent(text, events, images.length > 0),
+      images,
+      useSession.getState().settings.visionEnabled,
+    ),
+  });
 
   useSession.setState({ busy: true });
   useSession.getState().setStatus('准备请求');
@@ -521,8 +596,15 @@ function safeArguments(raw: string): string {
  * assistant 的 `reasoning_content` 必须完整回传,漏传直接 400。而 reasoning 是
  * 故意不落盘的,所以还原 `tool_calls` 必然缺 reasoning、**必然 400**。
  * 重建只产出普通文本消息。
+ *
+ * 三、**图片是唯一一个需要重新取回来的东西。** 它和 reasoning 一样不在这份历史里,
+ * 但不一样的是它落在 blob 库里、并没有丢 —— 所以带图的消息要重新拼成 content
+ * 数组。这也是这个函数变成 `async` 的唯一原因。
+ *
+ * 由 `send()` 在 push 这一轮新消息**之前**调用,所以这里看到的 messages 都是
+ * 已经完成的轮次。
  */
-export function ensureSystemMessage(): void {
+export async function ensureSystemMessage(): Promise<void> {
   const store = useSession.getState();
   // 按**当前**的设置拼 —— toolsEnabled 可能已因 ToolUnsupportedError 被降级改过
   const system: ApiMessage = { role: 'system', content: buildSystemPrompt(store.settings.toolsEnabled) };
@@ -537,8 +619,17 @@ export function ensureSystemMessage(): void {
     return;
   }
 
-  const rebuilt: ApiMessage[] = store.messages
-    .filter((m) => m.role !== 'notice') // notice 是界面提示,模型不该看到
-    .map((m) => ({ role: m.role, content: m.content }));
+  // 带图的消息要把图片重新挂回去 —— 像素在 blob 库里,而 apiHistory 是不落盘的。
+  // 不过这里用的是消息**原本的** content,不能再过一遍 composeUserContent:
+  // 那会把画布目录和"学生说:"前缀重复注入进历史。
+  const visionOn = store.settings.visionEnabled;
+  const rebuilt: ApiMessage[] = [];
+  for (const m of store.messages) {
+    if (m.role === 'notice') continue; // notice 是界面提示,模型不该看到
+    rebuilt.push({
+      role: m.role,
+      content: await attachImages(m.content, m.images ?? [], visionOn),
+    });
+  }
   useSession.setState({ apiHistory: [system, ...rebuilt] });
 }

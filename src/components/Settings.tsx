@@ -170,6 +170,23 @@ export function Settings({ onClose }: Props) {
           但生成的可视化内容可靠性会下降。接口不支持工具调用时会自动切换到这里。
         </small>
 
+        <label className="field row">
+          <input
+            type="checkbox"
+            checked={draft.visionEnabled}
+            onChange={(e) => setDraft({ ...draft, visionEnabled: e.target.checked })}
+          />
+          <span>当前模型支持图片输入</span>
+        </label>
+        <small className="field-note">
+          <strong>默认关。</strong>关着的时候粘贴的截图仍然会存到本地、也能在对话里回看，
+          只是<strong>不发给模型</strong> —— 发送时会明确告诉它「你看不到这张图」，
+          免得它对着「这道题怎么做」硬答，或者假装自己看见了。
+          <br />
+          需要视觉模型（gpt-4o、qwen-vl 之类）。DeepSeek 的 chat / reasoner 不吃图片，
+          多数第三方中转也不支持，所以默认关是安全的。
+        </small>
+
         <p className="warn">
           API Key 只存在这台浏览器里（本地数据库，明文），不会上传到任何服务器。
           但这也意味着：不要在公用电脑上填。

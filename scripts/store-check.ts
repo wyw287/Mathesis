@@ -11,8 +11,10 @@
  * 两条都不体现在正常路径上(单会话永远是对的),只能专门测。
  * 运行:npm run check:store
  */
-import { blankSession, useSession } from '../src/store/session';
+import { blankSession, referencedImageIds, useSession } from '../src/store/session';
 import type { ChatMessage } from '../src/store/session';
+import { getDataUrl, putImage } from '../src/lib/blob-store';
+import { installIndexedDB } from './fake-idb';
 
 let pass = 0;
 let fail = 0;
@@ -68,6 +70,19 @@ const PLOT = {
   curves: [{ type: 'explicit' as const, expr: 'x' }],
 };
 
+const PIXELS_A = 'data:image/png;base64,AAAA';
+const PIXELS_B = 'data:image/png;base64,BBBB';
+const IMG_A = { id: 'img-a', w: 100, h: 80, mime: 'image/png', bytes: 1234 };
+const IMG_B = { id: 'img-b', w: 100, h: 80, mime: 'image/png', bytes: 1234 };
+
+/**
+ * 让 fire-and-forget 的回收跑完。
+ *
+ * 假 IndexedDB 里请求回调是微任务、事务提交是宏任务,而删除是若干个串起来的
+ * await —— 一个 `setTimeout(0)` 不够。
+ */
+const settle = () => new Promise((r) => setTimeout(r, 20));
+
 async function main() {
   await waitHydrated();
 
@@ -120,6 +135,85 @@ async function main() {
     ok('快照里剥掉了思维链', rec.messages[0]?.reasoning === undefined, JSON.stringify(rec.messages[0]));
     ok('活工作集里仍然保留(界面还要显示它)', msgs()[0]?.reasoning === '一段很长的思考');
     ok('正文没有被动', rec.messages[0]?.content === '正文');
+  }
+
+  console.log('\n图片:跟着消息走,像素不进来');
+
+  {
+    resetStore();
+    store().pushMessage({ role: 'user', content: '这张图', images: [IMG_A] });
+    store().commitActive();
+    const rec = store().sessions['sess-a'];
+    // 和思维链**正相反**:那个是上万字符所以剥掉,这个只有几百字节,
+    // 剥掉等于刷新之后图就找不到了
+    ok('图片进了会话快照', rec.messages[0]?.images?.[0]?.id === 'img-a', JSON.stringify(rec.messages[0]));
+  }
+
+  {
+    resetStore();
+    store().pushMessage({ role: 'user', content: 'A 的图', images: [IMG_A] });
+    store().switchSession('sess-b');
+    ok('B 看不到 A 的图', msgs().length === 0, String(msgs().length));
+    store().switchSession('sess-a');
+    ok('切回 A,图还在', msgs()[0]?.images?.[0]?.id === 'img-a', JSON.stringify(msgs()[0]?.images));
+  }
+
+  console.log('\n哪些图片还被引用着 —— 回收的白名单');
+
+  {
+    resetStore();
+    store().pushMessage({ role: 'user', content: '图', images: [IMG_A] });
+    store().commitActive();
+    ok('当前会话的图算被引用', referencedImageIds(store()).has('img-a'));
+
+    // 这条是关键:**清空对话之后、下一次 commit 之前**,它就必须已经不在白名单里。
+    // 用 sessions[activeSessionId] 当来源的话这里读到的还是上一次的旧快照,
+    // 那些图就永远回收不掉了。
+    store().clearConversation();
+    ok('清空对话后立刻不再被引用(不能等 commit)', !referencedImageIds(store()).has('img-a'));
+  }
+
+  {
+    resetStore();
+    store().pushMessage({ role: 'user', content: '图', images: [IMG_B] });
+    store().commitActive();
+    store().switchSession('sess-b');
+    // 切走之后当前会话的扁平 messages 已经换人了,这张图只存在于 sess-a 的记录里
+    ok('别的会话里的图也算被引用', referencedImageIds(store()).has('img-b'));
+  }
+
+  console.log('\n丢弃消息时把像素一起删掉');
+
+  {
+    const idb = installIndexedDB();
+    await putImage('img-a', PIXELS_A);
+    await putImage('img-b', PIXELS_B);
+
+    resetStore();
+    store().pushMessage({ role: 'user', content: '给 A 的图', images: [IMG_A] });
+    store().commitActive();
+    store().switchSession('sess-b');
+    store().pushMessage({ role: 'user', content: '给 B 的图', images: [IMG_B] });
+    store().commitActive();
+    store().switchSession('sess-a');
+
+    store().clearConversation();
+    await settle();
+
+    ok('丢掉的那条对话,它的图也删了', (await getDataUrl('img-a')) === null);
+    // 反向:别的会话还在用那张图,不能一起清掉
+    ok('别的会话的图不受影响', (await getDataUrl('img-b')) === PIXELS_B);
+    idb.uninstall();
+  }
+
+  {
+    const idb = installIndexedDB();
+    await putImage('img-orphan', PIXELS_A);
+    resetStore();
+    store().finishHydration('indexeddb');
+    await settle();
+    ok('载入时把没人引用的孤儿收掉', (await getDataUrl('img-orphan')) === null);
+    idb.uninstall();
   }
 
   console.log('\nactiveSessionId 悬空时的回退');
