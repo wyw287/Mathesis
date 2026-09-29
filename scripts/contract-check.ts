@@ -9,7 +9,9 @@
  */
 import { parseSpec, titleFor, reconcileArtifacts } from '../src/kinds/registry';
 import { evaluateAll } from '../src/kinds/counterexample/checks';
-import { collapseOverEscaped } from '../src/lib/latex-plain';
+import { collapseOverEscaped, latexToPlain } from '../src/lib/latex-plain';
+import { TITLE_MAX } from '../src/lib/text';
+import { TOOLS } from '../src/tools';
 import { extractArtifactBlocks, stripArtifactBlocks } from '../src/llm/fallback';
 import { ToolInputError } from '../src/lib/validate';
 import { CURRENT_SCHEMA_VERSION, type CanvasArtifact } from '../src/types/artifact';
@@ -185,7 +187,7 @@ ok('集合写法被拍平', () => {
   );
   // \mathbb{R} → R,\setminus → \,转义的 \{ \} 是字面花括号所以要保留。
   // 断言不能写成「不含反斜杠」—— \setminus 拍成 \ 正是正确结果。
-  if (t !== '推导：R\\{0}') throw new Error(`得到 "${t}"`);
+  if (t !== 'R\\{0}') throw new Error(`得到 "${t}"`);
 });
 ok('测验标题不含美元符号', () => {
   const t = titleFor(parseSpec({ kind: 'quiz', question: String.raw`$\lim_{x\to 0}f(x)$ 存在吗?` }));
@@ -227,7 +229,7 @@ ok('标题已经正确时不新建对象、也不新建数组', () => {
     rev: 1,
     schemaVersion: CURRENT_SCHEMA_VERSION,
     origin: 'ai',
-    title: '测验：这个极限存在吗?',
+    title: '这个极限存在吗?',
     createdAt: 0,
     updatedAt: 0,
   };
@@ -647,10 +649,12 @@ console.log('\n标题:矩阵环境');
   const BS = String.fromCharCode(92);
   const q = (s: string) => titleFor(parseSpec({ kind: 'quiz', question: s }));
   const M = (body: string, env = 'pmatrix') => `${BS}begin{${env}}${body}${BS}end{${env}}`;
+  // 完整结果在这一层验 —— titleFor 还会再截一刀(见下面 label 那一节),在那里验不出全貌
+  const plain = (s: string) => latexToPlain(s);
 
   ok('行按 ;、列按 , 拍平', () => {
-    const t = q(`求 ${M(`1&2&3${BS}${BS}0&1&2${BS}${BS}0&0&1`)} 的逆`);
-    if (!t.includes('(1, 2, 3; 0, 1, 2; 0, 0, 1)')) throw new Error(t);
+    const out = plain(`求 ${M(`1&2&3${BS}${BS}0&1&2${BS}${BS}0&0&1`)} 的逆`);
+    if (!out.includes('(1, 2, 3; 0, 1, 2; 0, 0, 1)')) throw new Error(out);
   });
 
   ok('不再漏出 begin / end / 环境名', () => {
@@ -664,9 +668,9 @@ console.log('\n标题:矩阵环境');
   ok('行分隔符后面紧跟命令时,命令不能被吃掉', () => {
     // `\\\beta` 里的三个反斜杠是「2 个行分隔 + 1 个 \beta 自己的」。
     // 按"两个以上"贪婪地吃会把 \beta 也吃掉,拍成字面量 "beta"。
-    const t = q(M(`${BS}alpha&1${BS}${BS}${BS}beta&2`));
-    if (!t.includes('α')) throw new Error(`\\alpha 没了:${t}`);
-    if (!t.includes('β')) throw new Error(`\\beta 变成了字面量:${t}`);
+    const out = plain(M(`${BS}alpha&1${BS}${BS}${BS}beta&2`));
+    if (!out.includes('α')) throw new Error(`\\alpha 没了:${out}`);
+    if (!out.includes('β')) throw new Error(`\\beta 变成了字面量:${out}`);
   });
 
   ok('括号跟着环境走', () => {
@@ -695,6 +699,60 @@ console.log('\n标题:矩阵环境');
   ok('不认识的环境原样保留,不吃内容', () => {
     const t = q(`${BS}begin{tikzpicture}甲--乙${BS}end{tikzpicture}`);
     if (!t.includes('甲')) throw new Error(`内容被吃掉了:${t}`);
+  });
+}
+
+console.log('\n标题:模型给的短名优先 —— 标题里不该有公式');
+
+{
+  const BS = String.fromCharCode(92);
+  const deriv = (label?: string) => ({
+    kind: 'derivation',
+    label,
+    statement: `${BS}lim_{x${BS}to 0}${BS}sin${BS}frac{1}{x}${BS} ${BS}text{不存在}`,
+    steps: [{ id: 'a', latex: '1', reason: 'r' }],
+  });
+
+  ok('给了 label 就用它', () => {
+    const t = titleFor(parseSpec(deriv('极限不存在的证明')));
+    if (t !== '极限不存在的证明') throw new Error(`得到 "${t}"`);
+  });
+
+  ok('没给 label 才退化到自动派生', () => {
+    const t = titleFor(parseSpec(deriv()));
+    if (!t.includes('lim')) throw new Error(`没有退化:${t}`);
+    if (t.includes('$') || t.includes(BS)) throw new Error(`退化结果里还有 LaTeX:${t}`);
+  });
+
+  ok('label 也会被截断', () => {
+    const t = titleFor(parseSpec(deriv('一'.repeat(80))));
+    if (t.length > TITLE_MAX) throw new Error(`没截断:${t.length}`);
+  });
+
+  ok('空 label 当作没给', () => {
+    if (titleFor(parseSpec(deriv('   '))).trim() === '') throw new Error('标题成了空的');
+  });
+
+  ok('改 label 能穿过 edit_artifact 的 patch', () => {
+    // edit_artifact 走的是 patch 浅合并 + parseSpec 复检。label 不是 kind 的一部分,
+    // 所以那一层必须原样放它过去 —— 否则模型改不了名字。
+    const before = parseSpec(deriv('旧名字'));
+    const after = parseSpec({ ...before, label: '新名字' });
+    if (titleFor(after) !== '新名字') throw new Error(titleFor(after));
+  });
+
+  ok('新标题不再重复类别 —— 徽章已经在说这件事了', () => {
+    const t = titleFor(parseSpec({ kind: 'quiz', question: '这个极限存在吗?' }));
+    if (t.startsWith('测验')) throw new Error(`还带着类别前缀:${t}`);
+    if (t !== '这个极限存在吗?') throw new Error(`得到 "${t}"`);
+  });
+
+  ok('每个 kind 的工具都带 label 参数', () => {
+    // 在工具层统一注入的,所以这条是防止有人漏掉注入那一步
+    const missing = TOOLS.filter((t) => t.name !== 'read_artifact' && t.name !== 'edit_artifact')
+      .filter((t) => !(t.parameters as { properties?: Record<string, unknown> })?.properties?.label)
+      .map((t) => t.name);
+    if (missing.length) throw new Error(`这些工具没有 label 参数:${missing.join(', ')}`);
   });
 }
 

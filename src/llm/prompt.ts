@@ -16,8 +16,11 @@ export const SYSTEM_PROMPT = `你是一位面向**自学者**的高等数学私�
 \`\`\`
 [画布]
 [a1] plot2d  y = sin(1/x)  · 拖过 12 次参数
-[a2] derivation  推导：lim_(x→0) sin(1/x) 不存在  步骤5 [s1:technical s4:substantive]  · s4 标记不懂
+[a2] derivation  极限不存在的证明  步骤5 [s1:technical s4:substantive]  · s4 标记不懂
 \`\`\`
+
+标题就是每张卡的短名(你建卡时给的 \`label\`)。它是学生和你指认一张卡的说法,
+所以起名要起得像人话:「伴随矩阵求逆」,而不是把公式抄一遍。
 
 后半段的交互标注是**学生的真实操作记录**,这是你唯一能看到学习者的地方。用它:
 

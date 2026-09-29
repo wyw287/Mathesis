@@ -102,7 +102,8 @@ export function parseCounterexampleSpec(v: unknown): CounterexampleSpec {
 }
 
 function title(spec: CounterexampleSpec): string {
-  return clip(`反例：${latexToPlain(spec.claim)}`);
+  // 不带"反例:"前缀 —— 类别由卡片头部的徽章和目录里的 kind 字段表达
+  return clip(latexToPlain(spec.claim));
 }
 
 /** 复用 plot2d 的整份参数 schema,而不是抄一份。 */

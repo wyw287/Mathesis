@@ -16,7 +16,8 @@
  */
 import type { ArtifactKind, ArtifactSpec, CanvasArtifact } from '../types/artifact';
 import { migrateArtifact } from '../types/artifact';
-import { ToolInputError, obj, str } from '../lib/validate';
+import { clip } from '../lib/text';
+import { ToolInputError, obj, optStr, str } from '../lib/validate';
 import type { AnyKindModule } from './module';
 import { plot2dModule } from './plot2d';
 import { derivationModule } from './derivation';
@@ -79,11 +80,23 @@ export function parseSpec(v: unknown): ArtifactSpec {
   if (!mod) {
     throw new ToolInputError(`不认识的 kind "${kind}"。只支持:${KINDS.join(' | ')}`);
   }
-  return mod.parse(v) as ArtifactSpec;
+  const spec = mod.parse(v) as ArtifactSpec;
+  // `label` 在这里统一收下,而不是让每个 kind 的 parse 各解析一遍 ——
+  // 它对所有 kind 完全一样,是"这张卡叫什么"这么一个跨类型的概念。
+  // 放在这一层意味着**新增 kind 自动就有**,不用记得加。
+  const label = optStr(o.label, 'spec.label')?.trim();
+  return label ? { ...spec, label } : spec;
 }
 
-/** 按 kind 分派标题生成。 */
+/**
+ * 按 kind 分派标题生成。
+ *
+ * **模型给的 `label` 优先。** 自动派生只是兜底:它只能把内容拍成一行文本,
+ * 而命题、公式这些东西拍平之后既不好看也不完整(见 lib/text.ts 里那段)。
+ * 模型知道这张卡是干什么的,让它起个名比我们从内容里猜准得多。
+ */
 export function titleFor(spec: ArtifactSpec): string {
+  if (spec.label) return clip(spec.label);
   const mod = kindModule(spec.kind);
   return mod ? mod.title(spec) : '未知内容';
 }

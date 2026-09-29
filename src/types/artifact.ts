@@ -255,16 +255,33 @@ export interface Plot3DSpec {
   note?: string;
 }
 
-export type ArtifactSpec =
-  | Plot2DSpec
-  | DerivationSpec
-  | QuizSpec
-  | HtmlSpec
-  | CounterexampleSpec
-  | CompareSpec
-  | Plot3DSpec
-  | LinearSpec
-  | DiagramSpec;
+/**
+ * 每个 spec 都有的字段。
+ *
+ * `label` 是给这张卡起的**短名**("伴随矩阵求逆")。标题优先用它,理由见
+ * `lib/text.ts` 里那段:卡片头部是一行、还要再被 CSS 省略一次,塞不下一句命题;
+ * 而把公式拍平更是有损的 —— `\frac{1}{2}` 变 `1/2`,矩阵变 `1, 2, 3; 0, 1, 2`。
+ * 卡片本体就在正下方用 KaTeX 渲染着,标题不该去做那件事的劣化复制品。
+ *
+ * 挂在这个基类型上(而不是每个 kind 各写一遍):它对所有 kind 完全一样,
+ * 由 `registry.parseSpec` 统一收下,新增 kind 时不用记得加。
+ */
+export interface ArtifactBase {
+  label?: string;
+}
+
+export type ArtifactSpec = ArtifactBase &
+  (
+    | Plot2DSpec
+    | DerivationSpec
+    | QuizSpec
+    | HtmlSpec
+    | CounterexampleSpec
+    | CompareSpec
+    | Plot3DSpec
+    | LinearSpec
+    | DiagramSpec
+  );
 export type ArtifactKind = ArtifactSpec['kind'];
 
 // ---------------------------------------------------------------- 流程 / 逻辑图

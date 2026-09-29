@@ -1,12 +1,24 @@
 import { useCallback } from 'react';
 import { kindModule } from '../kinds/registry';
 import { useSession } from '../store/session';
-import type { CanvasArtifact, CanvasEvent } from '../types/artifact';
+import type { ArtifactKind, CanvasArtifact, CanvasEvent } from '../types/artifact';
 
-const KIND_LABEL: Record<string, string> = {
+/**
+ * 类别徽章上的字。
+ *
+ * 类型写成 `Record<ArtifactKind, string>` 是刻意的:新增一种 artifact 时
+ * 这里会**编译不过**,而不是像以前那样悄悄退回英文原名(`plot3d`、`linear`),
+ * 让人以为画布坏了。占位符那种写法在这类"必须覆盖全部成员"的表上不成立。
+ */
+const KIND_LABEL: Record<ArtifactKind, string> = {
   plot2d: '图像',
+  plot3d: '曲面',
   derivation: '推导',
   quiz: '测验',
+  counterexample: '反例',
+  compare: '对比',
+  diagram: '关系图',
+  linear: '变换',
   html: '交互',
 };
 
@@ -42,7 +54,7 @@ export function ArtifactCard({ artifact, focused }: Props) {
     <section className={focused ? 'artifact focused' : 'artifact'} onMouseDown={setFocus}>
       <header className="artifact-head">
         <span className={`kind kind-${artifact.spec.kind}`}>
-          {KIND_LABEL[artifact.spec.kind] ?? artifact.spec.kind}
+          {KIND_LABEL[artifact.spec.kind as ArtifactKind] ?? artifact.spec.kind}
         </span>
         <h3 className="artifact-title">{artifact.title}</h3>
         <span className="artifact-id" title="对话里可以按这个 id 引用它">

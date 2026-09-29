@@ -88,7 +88,9 @@ export function parseCompareSpec(v: unknown): CompareSpec {
 }
 
 function title(spec: CompareSpec): string {
-  return clip(`对比：${spec.items.map((i) => i.label).join(' / ')}`);
+  // 不带"对比:"前缀 —— 类别由卡片头部的徽章和目录里的 kind 字段表达。
+  // 各格自己的 label 是模型给的短标签,已经是最好的名字了。
+  return clip(spec.items.map((i) => i.label).join(' / '));
 }
 
 export const compareTool: TeachingTool = {

@@ -74,7 +74,8 @@ const tool: TeachingTool = {
 
 // ------------------------------------------------------------ artifact 操作
 function title(spec: QuizSpec): string {
-  return clip(`测验：${latexToPlain(spec.question)}`);
+  // 不带"测验:"前缀 —— 类别由卡片头部的徽章和目录里的 kind 字段表达
+  return clip(latexToPlain(spec.question));
 }
 
 export const quizModule: KindModule<QuizSpec> = {

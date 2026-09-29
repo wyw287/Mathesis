@@ -47,7 +47,8 @@ export const editArtifact: TeachingTool = {
       patch: {
         type: 'object',
         description:
-          '要覆盖的字段。例如把 x 轴拉宽并换掉曲线:{"view": {"x": [-10, 10]}, "curves": [...]}',
+          '要覆盖的字段。例如把 x 轴拉宽并换掉曲线:{"view": {"x": [-10, 10]}, "curves": [...]}\n' +
+          '只想起个新名字就用 {"label": "..."}。',
       },
     },
     required: ['id', 'patch'],

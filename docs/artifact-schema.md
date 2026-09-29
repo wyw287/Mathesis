@@ -52,6 +52,33 @@ interface CanvasArtifact<S extends ArtifactSpec = ArtifactSpec> {
 `title` 不是装饰。它是**上下文压缩的抓手**:塞给模型的永远只是
 `{id, kind, title}` 的目录,不是完整 spec(§7)。
 
+### title 从哪来:`label` 优先
+
+每个 spec 都可以带一个 `label` —— 模型建卡时给这张卡起的**短名**:
+
+```ts
+interface ArtifactBase {
+  label?: string;   // 「伴随矩阵求逆」「极限不存在的判据」
+}
+```
+
+`title = clip(label) ?? 按内容自动派生`。`label` 在 `registry.parseSpec` 里统一收下,
+不在各个 kind 的 parse 里 —— 它跟 kind 没有关系,而且这样新增 kind 自动就有。
+每个 kind 的工具参数里也统一注入了这同一个字段(在 `tools/index.ts` 那一层)。
+
+**为什么不让标题去装公式。** 卡片头部是一行,旁边还有类别徽章、id、修订号和删除
+按钮跟它并排,`.artifact-title` 上还挂着 `text-overflow: ellipsis` —— 也就是说
+超过 `TITLE_MAX`(24)之后它会在 CSS 那一层**再被省略一次**,省略的位置还取决于
+窗口宽度。而把公式拍成纯文本本身就是有损的:`\frac{1}{2}` 变 `1/2`,矩阵变成
+`1, 2, 3; 0, 1, 2`。卡片本体就在标题正下方,用 KaTeX 把它渲染得好好的 ——
+标题去做那件事,只会做出一个更差的复制品。
+
+所以分工是:**标题只说"这张卡是干什么的",内容交给卡片本体。** 想让标题"说完整"
+的冲动,正确做法是让模型给个 `label`,而不是把上限调大。
+
+标题里也**不再带类别前缀**(以前是 `推导：…`、`测验：…`)。类别由卡片头部的徽章
+和目录里的 `kind` 字段表达,前缀只是白占字数,而长度直接是 token 开销。
+
 ---
 
 ## 3. Spec 家族

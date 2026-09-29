@@ -81,7 +81,8 @@ function parseEdge(v: unknown, i: number, ids: Set<string>): DiagramEdgeSpec {
 function title(spec: DiagramSpec): string {
   if (spec.note) return clip(spec.note);
   const key = spec.nodes.find((n) => n.role === 'key' || n.role === 'conclusion');
-  return clip(`图：${latexToPlain((key ?? spec.nodes[0]!).label)}`);
+  // 不带"图:"前缀 —— 类别由卡片头部的徽章和目录里的 kind 字段表达
+  return clip(latexToPlain((key ?? spec.nodes[0]!).label));
 }
 
 export const diagramTool: TeachingTool = {

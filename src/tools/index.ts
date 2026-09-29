@@ -20,9 +20,43 @@ import type { TeachingTool } from './types';
 
 export type { TeachingTool, ToolContext, ToolOutcome } from './types';
 
+/**
+ * 每个 kind 的工具都有的那一个参数。
+ *
+ * 在这一层注入,而不是让 9 个 kind 各写一遍:它跟 kind 没有任何关系,
+ * 是"这张卡叫什么"这么一个跨类型的概念。`registry.parseSpec` 同样统一收下它,
+ * 所以新增 kind 时不用记得加。
+ *
+ * 文案是有意的:**先说不要写公式**。标题是一行、还会在 CSS 里再被省略一次,
+ * 塞公式只会变成一串被切断的符号 —— 而卡片本体就在正下方把它渲染得好好的。
+ * 让它起名,比我们从内容里猜准得多。
+ */
+const LABEL_PARAM = {
+  type: 'string',
+  description:
+    '给这张卡起一个**短名**(4~10 个字),比如「伴随矩阵求逆」「极限存在的判据」。\n' +
+    '它会成为卡片头部那句话,也会每轮出现在模型的画布目录里,是学生和模型指认这张卡的说法。\n' +
+    '**不要写公式** —— 标题只有一行,公式在这里只会被截断成一串符号,' +
+    '而卡片本体里已经把它渲染好了。一句话说清"这张卡是干什么的"就行。\n' +
+    '不填也能用,但标题会按内容自动生成,通常又长又难认。',
+};
+
+function withLabel(t: TeachingTool): TeachingTool {
+  const params = t.parameters as {
+    properties?: Record<string, unknown>;
+  };
+  return {
+    ...t,
+    parameters: {
+      ...t.parameters,
+      properties: { label: LABEL_PARAM, ...(params.properties ?? {}) },
+    },
+  };
+}
+
 /** 各 kind 自己声明的工具,加上两个通用操作。没有工具的 kind 会被跳过(如 html)。 */
 export const TOOLS: TeachingTool[] = [
-  ...KIND_MODULES.map((m) => m.tool).filter((t): t is TeachingTool => !!t),
+  ...KIND_MODULES.map((m) => m.tool).filter((t): t is TeachingTool => !!t).map(withLabel),
   readArtifact,
   editArtifact,
 ];

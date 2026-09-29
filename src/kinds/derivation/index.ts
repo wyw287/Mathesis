@@ -166,13 +166,18 @@ const tool: TeachingTool = {
     const spec = parseDerivationSpec(args);
     const gaps = spec.steps.filter((s) => s.gap === 'unjustified').length;
     const warn = gaps ? `（其中 ${gaps} 步标记为未证明,这是诚实的做法）` : '';
-    return { message: `已展示推导：${title(spec)}${warn}`, created: [{ spec, title: title(spec) }] };
+    return { message: `已展示:${title(spec)}${warn}`, created: [{ spec, title: title(spec) }] };
   },
 };
 
 // ---------------------------------------------------------------------- quiz
+/**
+ * 标题里**不带"推导:"这个前缀** —— 卡片头部左边的类别徽章已经在说这件事了,
+ * 每轮发给模型的目录里也有 `kind` 字段。前缀只是白占字数,而标题的长度是
+ * 直接算进上下文开销的。
+ */
 function title(spec: DerivationSpec): string {
-  return clip(spec.statement ? `推导：${latexToPlain(spec.statement)}` : '推导');
+  return clip(spec.statement ? latexToPlain(spec.statement) : '推导');
 }
 
 export const derivationModule: KindModule<DerivationSpec> = {
