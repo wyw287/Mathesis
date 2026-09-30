@@ -27,6 +27,7 @@ import { counterexampleModule } from './counterexample';
 import { compareModule } from './compare';
 import { plot3dModule } from './plot3d';
 import { linearModule } from './linear';
+import { matrixModule } from './matrix';
 import { diagramModule } from './diagram';
 
 /**
@@ -43,6 +44,7 @@ export const KIND_MODULES = [
   compareModule,
   plot3dModule,
   linearModule,
+  matrixModule,
   diagramModule,
   htmlModule,
 ] as const;

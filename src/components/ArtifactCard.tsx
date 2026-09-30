@@ -19,6 +19,7 @@ const KIND_LABEL: Record<ArtifactKind, string> = {
   compare: '对比',
   diagram: '关系图',
   linear: '变换',
+  matrix: '矩阵',
   html: '交互',
 };
 

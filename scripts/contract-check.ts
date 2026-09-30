@@ -11,6 +11,7 @@ import { parseSpec, titleFor, reconcileArtifacts } from '../src/kinds/registry';
 import { evaluateAll } from '../src/kinds/counterexample/checks';
 import { collapseOverEscaped, latexToPlain } from '../src/lib/latex-plain';
 import { TITLE_MAX } from '../src/lib/text';
+import { MAX_DIM } from '../src/lib/matrixn';
 import { TOOLS } from '../src/tools';
 import { extractArtifactBlocks, stripArtifactBlocks } from '../src/llm/fallback';
 import { ToolInputError } from '../src/lib/validate';
@@ -755,6 +756,61 @@ console.log('\n标题:模型给的短名优先 —— 标题里不该有公式')
     if (missing.length) throw new Error(`这些工具没有 label 参数:${missing.join(', ')}`);
   });
 }
+
+console.log('\n矩阵:校验与标题');
+
+{
+  const rows = [['1', '2'], ['3', '4']];
+
+  ok('能解析一个矩阵', () => {
+    const s = parseSpec({ kind: 'matrix', rows }) as { rows: string[][] };
+    if (s.rows.length !== 2 || s.rows[0][1] !== '2') throw new Error(JSON.stringify(s.rows));
+  });
+
+  ok('标题是尺寸,不是元素', () => {
+    // 把元素列出来认不出是哪张卡;尺寸一眼就能对上学生在算哪一步
+    const t = titleFor(parseSpec({ kind: 'matrix', rows }));
+    if (t !== '2×2 矩阵') throw new Error(t);
+  });
+
+  ok('带乘法时标题写明两个尺寸', () => {
+    const t = titleFor(parseSpec({ kind: 'matrix', rows, multiplyBy: [['1'], ['2']] }));
+    if (t !== '2×2 乘 2×1') throw new Error(t);
+  });
+
+  ok('label 仍然优先于自动标题', () => {
+    const t = titleFor(parseSpec({ kind: 'matrix', rows, label: '旋转矩阵' }));
+    if (t !== '旋转矩阵') throw new Error(t);
+  });
+
+  ok('元素可以是引用参数的表达式', () => {
+    const s = parseSpec({
+      kind: 'matrix',
+      rows: [['a', '0'], ['0', 'b']],
+      params: [{ name: 'a', value: 1, min: 0, max: 3 }, { name: 'b', value: 2, min: 0, max: 3 }],
+    }) as { rows: string[][] };
+    if (s.rows[0][0] !== 'a') throw new Error(JSON.stringify(s.rows));
+  });
+
+  ok('focus 可以省略', () => {
+    const s = parseSpec({ kind: 'matrix', rows }) as { focus?: number[] };
+    if (s.focus !== undefined) throw new Error('不该有默认 focus —— 那是渲染器的事');
+  });
+
+  ok('focus 会被取整并夹到非负', () => {
+    const s = parseSpec({ kind: 'matrix', rows, focus: [1.7, -3] }) as { focus: number[] };
+    if (s.focus[0] !== 1 || s.focus[1] !== 0) throw new Error(JSON.stringify(s.focus));
+  });
+}
+
+rejects('空矩阵', { kind: 'matrix', rows: [] }, '空矩阵');
+rejects('每一行是空的', { kind: 'matrix', rows: [[]] }, '不能是空');
+rejects('行列不齐', { kind: 'matrix', rows: [['1', '2'], ['3']] }, '列数');
+rejects('超过尺寸上限', { kind: 'matrix', rows: Array.from({ length: MAX_DIM + 1 }, () => ['1']) }, '最大');
+rejects('列数超过上限', { kind: 'matrix', rows: [Array.from({ length: MAX_DIM + 1 }, () => '1')] }, '最大');
+rejects('focus 不是一个二元组', { kind: 'matrix', rows: [['1']], focus: [1] }, 'spec.focus');
+rejects('focus 里不是数字', { kind: 'matrix', rows: [['1']], focus: ['a', 1] }, 'spec.focus[0]');
+rejects('multiplyBy 也按同样的规矩校验', { kind: 'matrix', rows: [['1']], multiplyBy: [['1', '2'], ['3']] }, '列数');
 
 console.log('\n流程 / 逻辑图 —— 解析');
 

@@ -1693,6 +1693,139 @@ code:not(pre > code) {
   stroke-width: 2.2;
 }
 
+/* ---------------------------------------------------------------- matrix */
+
+/* 矩阵卡片。格子是 <button>(点它选行/列),所以要把按钮的默认样式清干净。 */
+.mx {
+  padding: 10px 14px 12px;
+}
+
+.mx-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.mx-op {
+  flex: none;
+  font-size: 18px;
+  color: var(--muted);
+}
+
+.mx-grid-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.mx-grid-label {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.mx-grid {
+  display: grid;
+  gap: 2px;
+}
+
+.mx-cell {
+  min-width: 2.6em;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 14px;
+  text-align: center;
+}
+
+.mx-cell:hover {
+  border-color: var(--border-strong);
+}
+
+/* 选中的那一行 / 那一列。聚焦格会同时落在某一行和某一列上,所以它用边框和字色
+   再标一次 —— 只靠背景的话,和"只命中行"或"只命中列"的格子分不出来。 */
+.mx-cell.hi-row,
+.mx-cell.hi-col {
+  background: var(--accent-soft);
+}
+
+.mx-cell.sel {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.mx-step {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.mx-step-head {
+  font-size: 12.5px;
+  color: var(--muted);
+}
+
+.mx-step-body {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-family: var(--mono);
+  font-size: 14px;
+}
+
+.mx-derived {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.mx-fact {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.mx-fact-name {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.mx-fact-value {
+  font-family: var(--mono);
+}
+
+.mx-fact-note {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.mx-fact.warn .mx-fact-value,
+.mx-fact.warn .mx-fact-note {
+  color: var(--gap-unjustified-fg);
+}
+
+.mx-warn {
+  margin-top: 10px;
+  padding: 8px 11px;
+  border-radius: 8px;
+  background: var(--gap-unjustified-bg);
+  color: var(--gap-unjustified-fg);
+  font-size: 13px;
+}
+
 .lin-panel {
   display: flex;
   align-items: flex-start;

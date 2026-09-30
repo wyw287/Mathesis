@@ -270,6 +270,32 @@ export interface ArtifactBase {
   label?: string;
 }
 
+/**
+ * matrix —— 矩阵作为**代数对象**。
+ *
+ * 和 `linear` 的分工是刻意的,不是重复:
+ *   · `linear` 是"矩阵对空间做了什么"(2×2 的几何:网格怎么扭、面积怎么变)
+ *   · `matrix` 是"矩阵本身是什么"(任意尺寸的行列、乘法、转置、逆)
+ *
+ * 同一个东西的两面。`matrix` 的存在还补上了一件事:在此之前矩阵只能作为
+ * `linear` 面板里的一小块、或者 `derivation` 里的一串 LaTeX 出现 ——
+ * **它不是一个可以被引用的对象**,模型没法说"看 @a3 的第 2 行",学生也没法点。
+ */
+export interface MatrixSpec {
+  kind: 'matrix';
+  /** 主矩阵,按行。元素是**表达式**,可以引用 params —— 于是每个元素都能挂滑块。 */
+  rows: string[][];
+  params?: ParamSpec[];
+  /**
+   * 再给一个矩阵,就会画出 `rows · multiplyBy`,并能逐步演示第 i 行 × 第 j 列
+   * 是怎么加出来的。矩阵乘法那个"行乘列"是从文字上最难建立直觉的一步。
+   */
+  multiplyBy?: string[][];
+  /** 乘积里先聚焦哪一格 `[行, 列]`。学生点一下就换,这里只是开场停在哪儿。 */
+  focus?: [number, number];
+  note?: string;
+}
+
 export type ArtifactSpec = ArtifactBase &
   (
     | Plot2DSpec
@@ -280,6 +306,7 @@ export type ArtifactSpec = ArtifactBase &
     | CompareSpec
     | Plot3DSpec
     | LinearSpec
+    | MatrixSpec
     | DiagramSpec
   );
 export type ArtifactKind = ArtifactSpec['kind'];

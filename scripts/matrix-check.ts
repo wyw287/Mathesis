@@ -1,14 +1,31 @@
 /**
- * 2×2 线性代数的自检。
+ * 矩阵代数的自检。
  *
- * 这一层是为了让**模型只写矩阵**,几何结果全由代码算 —— 所以算错了没人能发现。
- * 特征向量这种东西"看起来对"和"真的对"差得很远,必须逐条验。
+ * 上面那半是 **2×2 的几何**(行列式的面积含义、特征方向);下面那半是
+ * **任意尺寸的代数**(乘法、转置、行列式、逆)。
  *
- * 核心不变量:`Av = λv`。每个报出来的特征对都要满足它,随机扫几百个矩阵。
+ * 这一整层的意义是让**模型只写数字**,其余全由代码算 —— 所以算错了没人能发现。
+ * 特征向量、逆矩阵这种东西尤其"看起来对"和"真的对"差得很远:逆矩阵画出来
+ * 就是个矩阵,肉眼看不出它错在哪。
+ *
+ * 核心不变量:
+ *   · `Av = λv` —— 每个报出来的特征对都要满足它
+ *   · `(AB)v = A(Bv)` —— 矩阵乘法结合律
+ *   · `A·A⁻¹ = I` —— 每个报出来的逆都要满足它
+ * 每条都随机扫几百个矩阵。
  *
  * 运行:npm run check:matrix
  */
 import { apply, det, eigen, isSingular, nullSpace, rank, trace, unitSquareImage, type Mat2 } from '../src/lib/matrix2';
+import {
+  determinant,
+  dotProducts,
+  inverse,
+  isSquare,
+  multiply,
+  transpose,
+  type Matrix,
+} from '../src/lib/matrixn';
 
 let pass = 0;
 let fail = 0;
@@ -25,6 +42,18 @@ function ok(name: string, cond: boolean, detail = '') {
 
 const m = (a: number, b: number, c: number, d: number): Mat2 => ({ a, b, c, d });
 const near = (x: number, y: number, tol = 1e-9) => Math.abs(x - y) <= tol;
+
+/** 任意尺寸的矩阵,给下面那半用。 */
+const mat = (...rows: number[][]): Matrix => rows;
+const I = (n: number): Matrix => Array.from({ length: n }, (_, i) => Array.from({ length: n }, (_, j) => (i === j ? 1 : 0)));
+/** 矩阵乘向量。只为验结合律,所以不放进产品代码。 */
+const mulVec = (m: Matrix, v: number[]): number[] => m.map((row) => row.reduce((s, x, k) => s + x * v[k], 0));
+const randMat = (r: number, c: number): Matrix =>
+  Array.from({ length: r }, () => Array.from({ length: c }, () => Math.round((Math.random() - 0.5) * 6)));
+const sameShape = (a: Matrix, b: Matrix) =>
+  a.length === b.length && a.every((row, i) => row.length === b[i].length);
+const close = (a: Matrix, b: Matrix, tol = 1e-9) =>
+  sameShape(a, b) && a.every((row, i) => row.every((v, j) => Math.abs(v - b[i][j]) <= tol));
 
 async function main() {
   console.log('\n行列式 —— 几何上是面积的缩放倍数');
@@ -209,6 +238,105 @@ async function main() {
       const cross = Math.abs(zero.vector[0] * ns.dir[1] - zero.vector[1] * ns.dir[0]);
       ok('它和零空间是同一条线', near(cross, 0, 1e-9), `叉积 ${cross}`);
     }
+  }
+
+  console.log('\n任意尺寸:乘法与转置');
+
+  {
+    ok('单位阵不改变任何东西', close(multiply(I(3), mat([1, 2], [3, 4], [5, 6]))!, mat([1, 2], [3, 4], [5, 6])));
+    ok('已知乘积', close(multiply(mat([1, 2], [3, 4]), mat([5, 6], [7, 8]))!, mat([19, 22], [43, 50])));
+
+    // 3×2 乘 2×3 得 3×3 —— 非方阵也要走通,画布上不必都是方阵
+    const a = mat([1, 2], [3, 4], [5, 6]);
+    const b = mat([7, 8, 9], [10, 11, 12]);
+    const ab = multiply(a, b);
+    ok('非方阵能相乘', !!ab && sameShape(ab, mat([0, 0, 0], [0, 0, 0], [0, 0, 0])), JSON.stringify(ab));
+
+    // 维数配不上要**明说不能乘**,而不是编一个数出来
+    ok('维数配不上返回 null', multiply(a, a) === null);
+
+    ok('转置两次回到原样', close(transpose(transpose(a)), a));
+    ok('转置把 m×n 变成 n×m', sameShape(transpose(a), mat([0, 0, 0], [0, 0, 0])), JSON.stringify(transpose(a)));
+    ok('转置确实是转置', close(transpose(mat([1, 2], [3, 4])), mat([1, 3], [2, 4])));
+  }
+
+  {
+    // 结合律 (AB)v = A(Bv)。随机扫,因为乘法最容易写错的就是下标顺序,
+    // 而小矩阵上写反了下标常常也"看起来对"
+    let bad = 0;
+    let tested = 0;
+    for (let t = 0; t < 300; t++) {
+      const n = 2 + Math.floor(Math.random() * 3);
+      const A = randMat(n, n);
+      const B = randMat(n, n);
+      const v = Array.from({ length: n }, () => Math.round((Math.random() - 0.5) * 6));
+      const AB = multiply(A, B);
+      if (!AB) continue;
+      tested++;
+      const left = mulVec(AB, v);
+      const right = mulVec(A, mulVec(B, v));
+      if (left.some((x, i) => Math.abs(x - right[i]) > 1e-9)) bad++;
+    }
+    ok('随机 300 组:(AB)v = A(Bv)', bad === 0, `${bad} 组不符`);
+    ok('而且确实跑到了不少组(不然这条是空转)', tested > 100, `只跑了 ${tested} 组`);
+  }
+
+  console.log('\n任意尺寸:行列式与逆');
+
+  {
+    ok('单位阵行列式为 1', determinant(I(4)) === 1);
+    ok('2×2 和 matrix2 的结果一致', near(determinant(mat([1, 2], [3, 4]))!, det(m(1, 2, 3, 4))));
+    ok('交换两行翻转符号', near(determinant(mat([3, 4], [1, 2]))!, -det(m(1, 2, 3, 4))));
+
+    // 主元为零但矩阵不奇异(需要换行才能算下去)是最容易写错的一种
+    ok('需要换行才不奇异', near(determinant(mat([0, 1], [1, 0]))!, -1), String(determinant(mat([0, 1], [1, 0]))));
+    ok('奇异矩阵行列式为 0', determinant(mat([1, 2, 3], [2, 4, 6], [7, 8, 9])) === 0);
+    ok('非方阵没有行列式', determinant(mat([1, 2])) === null);
+
+    ok('逆:2×2 闭式对得上', close(inverse(mat([1, 2], [3, 4]))!, mat([-2, 1], [1.5, -0.5])));
+    ok('奇异矩阵没有逆', inverse(mat([1, 2], [2, 4])) === null);
+    ok('零矩阵没有逆', inverse(mat([0, 0], [0, 0])) === null);
+    ok('非方阵没有逆', inverse(mat([1, 2, 3], [4, 5, 6])) === null);
+  }
+
+  {
+    // A·A⁻¹ = I。这条是逆矩阵唯一的验收标准 —— 光看数字看不出来对不对。
+    let bad = 0;
+    let found = 0;
+    for (let t = 0; t < 300; t++) {
+      const n = 2 + Math.floor(Math.random() * 3);
+      const A = randMat(n, n);
+      const inv = inverse(A);
+      if (!inv) continue;
+      found++;
+      const prod = multiply(A, inv);
+      if (!prod || !close(prod, I(n), 1e-6)) bad++;
+    }
+    ok('随机 300 组:每个报出来的逆都满足 A·A⁻¹ = I', bad === 0, `${bad} 个不满足`);
+    ok('而且确实算出了不少逆(不然这条是空转)', found > 50, `只算了 ${found} 个`);
+  }
+
+  {
+    // det 是相对判据:元素整体缩小时,奇异/非奇异的结论不能跟着变
+    ok('整体很小但满秩,不能误判成奇异', determinant(mat([1e-6, 0], [0, 1e-6]))! !== 0);
+    ok('整体很大且确实奇异,要判出来', determinant(mat([1e6, 2e6], [1e6, 2e6])) === 0);
+  }
+
+  console.log('\n行 × 列的过程');
+
+  {
+    const A = mat([3, 4], [1, 2]);
+    const B = mat([5, 6], [7, 8]);
+    const terms = dotProducts(A, B, 0, 1);
+    ok('逐项乘积就是行乘列', JSON.stringify(terms) === JSON.stringify([3 * 6, 4 * 8]), JSON.stringify(terms));
+    // 它必须和 multiply 给出的那一格完全一致,不然面板上会同时出现两个数
+    const byMultiply = multiply(A, B)![0][1];
+    ok('求和等于 multiply 的那一格', near(terms!.reduce((s, x) => s + x, 0), byMultiply), `${terms!.reduce((s, x) => s + x, 0)} vs ${byMultiply}`);
+    ok('下标越界返回 null 而不是崩', dotProducts(A, B, 9, 0) === null);
+  }
+
+  {
+    ok('isSquare 认得方阵', isSquare(mat([1, 2], [3, 4])) && !isSquare(mat([1, 2, 3])));
   }
 
   console.log(`\n${pass} 通过, ${fail} 失败\n`);

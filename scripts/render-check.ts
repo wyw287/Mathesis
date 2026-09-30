@@ -12,6 +12,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Derivation } from '../src/kinds/derivation/Derivation';
 import { LinearView } from '../src/kinds/linear/LinearView';
+import { MatrixView } from '../src/kinds/matrix/MatrixView';
 import { parseSpec } from '../src/kinds/registry';
 import { Markdown, MathBlock } from '../src/renderers/Markdown';
 import { unwrap } from '../src/renderers/Latex';
@@ -297,6 +298,60 @@ console.log('\n线性变换:可拖的手柄只在能反解时出现');
   ok('奇异矩阵画出零空间那条线', asParams.includes('lin-null'), '');
   ok('满秩矩阵不画零空间', !asLiterals.includes('lin-null'), '');
   ok('面板里说清了零空间', asParams.includes('零空间'), '');
+}
+
+console.log('\n矩阵卡片:行 × 列的过程');
+
+{
+  const render = (spec: unknown) =>
+    renderToStaticMarkup(
+      createElement(MatrixView, {
+        spec: parseSpec(spec) as never,
+        scope: {},
+        artifactId: 'A',
+        rev: 1,
+        onParam: () => {},
+        emit: () => {},
+      }),
+    );
+
+  // A 的第 1 行 × B 的第 2 列:3×6 + 4×8 = 18 + 32 = 50
+  const h = render({
+    kind: 'matrix',
+    rows: [['3', '4'], ['1', '2']],
+    multiplyBy: [['5', '6'], ['7', '8']],
+    focus: [0, 1],
+  });
+
+  ok('把行乘列展开成了一串加法', h.includes('3×6') && h.includes('4×8'), '');
+  ok('也显示了逐项乘积', h.includes('= 18 + 32 ='), '');
+  ok('以及最后的总和', h.includes('<strong>50</strong>'), '');
+  ok('高亮了 A 的那一行', h.includes('hi-row'), '');
+  ok('高亮了 B 的那一列', h.includes('hi-col'), '');
+  // 聚焦格会同时落在某一行和某一列上,所以它必须还有自己的标记
+  ok('聚焦的那一格另有标记', /class="mx-cell[^"]*\bsel\b/.test(h), '');
+  ok('算出了 det', h.includes('det A'), '');
+  ok('算出了转置', h.includes('Aᵀ'), '');
+  ok('算出了逆', h.includes('A⁻¹'), '');
+
+  // 维数配不上:必须**明说**,而不是留一个空位让人猜哪里错了
+  const bad = render({ kind: 'matrix', rows: [['1', '2']], multiplyBy: [['1'], ['2'], ['3']] });
+  ok('维数配不上时明说', bad.includes('才能相乘'), '');
+  ok('而且不假装画出了结果', !bad.includes('A·B'), '');
+
+  const solo = render({ kind: 'matrix', rows: [['1', '2'], ['3', '4']] });
+  ok('单张矩阵时不显示乘法过程', !solo.includes('mx-step'), '');
+  ok('单张矩阵仍然算派生量', solo.includes('det A') && solo.includes('A⁻¹'), '');
+
+  // 非方阵没有 det / 逆 —— 不该硬显示一个数字出来
+  const rect = render({ kind: 'matrix', rows: [['1', '2', '3'], ['4', '5', '6']] });
+  ok('非方阵不显示 det', !rect.includes('det A'), '');
+  ok('非方阵仍然显示转置', rect.includes('Aᵀ'), '');
+
+  // 奇异矩阵:逆不存在,而那是**要讲给学生听的**情形,所以要明说
+  const singular = render({ kind: 'matrix', rows: [['1', '2'], ['2', '4']] });
+  ok('不可逆时明说不存在', singular.includes('不存在'), '');
+  ok('并且指出 det 为 0 意味着什么', singular.includes('不可逆'), '');
 }
 
 console.log(`\n${pass} 通过, ${fail} 失败\n`);
