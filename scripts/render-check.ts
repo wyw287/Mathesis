@@ -11,6 +11,8 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { Derivation } from '../src/kinds/derivation/Derivation';
+import { LinearView } from '../src/kinds/linear/LinearView';
+import { parseSpec } from '../src/kinds/registry';
 import { Markdown, MathBlock } from '../src/renderers/Markdown';
 import { unwrap } from '../src/renderers/Latex';
 
@@ -259,6 +261,42 @@ console.log('\n推导步骤的「理由」是散文,里面也会有公式');
   // 但关键是**原始 LaTeX 不能再出现** —— 修复前这里打印的就是那段裸文本。
   const bareCase = render(String.raw`欧姆定律给出支路电流 g_{ij}(v_i - v_j);KCL 要求流出节点 i 的电流之和等于外部注入`);
   ok('没有 $ 时也不原样打印裸 LaTeX', !bareCase.includes('g_{ij}'), bareCase.slice(0, 160));
+}
+
+console.log('\n线性变换:可拖的手柄只在能反解时出现');
+
+{
+  // 拖动要把坐标写回参数,所以**只有元素恰好是一个参数名**时才画得出手柄 ——
+  // 复合表达式(cos(t)、2*a)没法从坐标反解。这条规则很容易在以后被改坏,
+  // 而坏了的表现是"手柄明明在、拖了却不动",很难查。
+  const render = (spec: unknown, scope: Record<string, number>) =>
+    renderToStaticMarkup(
+      createElement(LinearView, {
+        spec: parseSpec(spec) as never,
+        scope,
+        artifactId: 'A',
+        rev: 1,
+        onParam: () => {},
+        emit: () => {},
+      }),
+    );
+
+  const params = [
+    { name: 'a', value: 1, min: -3, max: 3 },
+    { name: 'b', value: 2, min: -3, max: 3 },
+    { name: 'c', value: 2, min: -3, max: 3 },
+    { name: 'd', value: 4, min: -3, max: 3 },
+  ];
+  // 元素全是参数名 ⇒ 可拖。而且 ad=4、bc=4 ⇒ 奇异,顺带验零空间那条线
+  const asParams = render({ kind: 'linear', matrix: [['a', 'b'], ['c', 'd']], params }, { a: 1, b: 2, c: 2, d: 4 });
+  // 元素是字面量 ⇒ 没有可写的参数,不该出现手柄
+  const asLiterals = render({ kind: 'linear', matrix: [['1', '0'], ['0', '2']] }, {});
+
+  ok('元素写成参数时画出可拖的手柄', asParams.includes('lin-handle'), '');
+  ok('元素是字面量时不画手柄(拖不动的东西不该长得像能拖)', !asLiterals.includes('lin-handle'), '');
+  ok('奇异矩阵画出零空间那条线', asParams.includes('lin-null'), '');
+  ok('满秩矩阵不画零空间', !asLiterals.includes('lin-null'), '');
+  ok('面板里说清了零空间', asParams.includes('零空间'), '');
 }
 
 console.log(`\n${pass} 通过, ${fail} 失败\n`);

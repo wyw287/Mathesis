@@ -99,6 +99,14 @@ export interface MessageImage {
  */
 export interface InteractionStats {
   paramChanges: number;
+  /**
+   * 在图上**直接拖动**过一个点(比如线性变换里拖基向量的像)。
+   *
+   * 和 `paramChanges` 分开记:拖滑块是"我在试这个参数",拖图上的点更像
+   * "我在试着把那个方向摆到某个位置" —— 后者刻意得多,值得单独成为信号。
+   * 而且拖点会顺带改参数,混在一起计数会让"拖过一次"看起来像"拖过两次参数"。
+   */
+  pointDrags: number;
   /** 点过"这步不懂"的步骤。最强的困惑信号。 */
   confusedSteps: string[];
   expandedSteps: string[];
@@ -108,6 +116,7 @@ export interface InteractionStats {
 
 const EMPTY_STATS = (): InteractionStats => ({
   paramChanges: 0,
+  pointDrags: 0,
   confusedSteps: [],
   expandedSteps: [],
   answers: 0,
@@ -132,6 +141,11 @@ function bumpInteraction(
   switch (e.type) {
     case 'paramChange':
       next.paramChanges = cur.paramChanges + 1;
+      break;
+    case 'pointDrag':
+      // `?? 0` 不是防御性编程:旧存档里的记录没有这个字段,直接加会得到 NaN,
+      // 而 NaN 会一路进到发给模型的目录里
+      next.pointDrags = (cur.pointDrags ?? 0) + 1;
       break;
     case 'stepConfused':
       next.confusedSteps = uniq([...cur.confusedSteps, e.stepId]);

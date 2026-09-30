@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { safeEval } from '../../lib/math';
-import { apply, det, eigen, type Mat2, type Vec2 } from '../../lib/matrix2';
+import { apply, det, eigen, isSingular, nullSpace, rank, type Mat2, type NullSpace, type Vec2 } from '../../lib/matrix2';
 import { PAD, PlaneAxes, PlaneGrid, clampCoord, ticks } from '../../renderers/plane';
 import { ParamSliders } from '../../renderers/ParamSliders';
-import type { CanvasEvent, LinearSpec } from '../../types/artifact';
+import type { CanvasEvent, LinearSpec, ParamSpec } from '../../types/artifact';
 
 const HEIGHT = 420;
 const DEFAULT_VIEW = { x: [-3, 3] as [number, number], y: [-3, 3] as [number, number] };
@@ -16,6 +16,21 @@ interface Props {
   onParam: (name: string, value: number) => void;
   emit: (e: CanvasEvent) => void;
 }
+
+/** 一个可以直接拖的点:拖动会写回这两个参数(横坐标一个、纵坐标一个)。 */
+interface Handle {
+  name: string;
+  /** 样式类。基向量的像用红的,探测向量用绿的 —— 和它们各自的线同色。 */
+  cls: string;
+  /** 悬停时显示的那句话。 */
+  hint: string;
+  px: ParamSpec;
+  py: ParamSpec;
+  at: Vec2;
+}
+
+/** 夹到参数自己的范围里 —— 拖出范围会让滑块显示一个它根本表示不了的值。 */
+const clampTo = (p: ParamSpec, v: number) => Math.min(p.max, Math.max(p.min, v));
 
 function useWidth<T extends HTMLElement>() {
   const ref = useRef<T>(null);
@@ -91,6 +106,127 @@ export function LinearView({ spec, scope, artifactId, onParam, emit }: Props) {
   const px = (p: Vec2) => `${clampCoord(tx(p[0]))} ${clampCoord(ty(p[1]))}`;
 
   const info = useMemo(() => (m ? { det: det(m), eigen: eigen(m) } : null), [m]);
+  const rankVal = useMemo(() => (m ? rank(m) : null), [m]);
+  const ns = useMemo(() => (m ? nullSpace(m) : null), [m]);
+
+  /**
+   * 秩亏时,λ=0 的特征方向**就是**零空间 —— 同一条线。
+   *
+   * 画两遍只会叠成一条看不清的东西,所以这里把 λ≈0 的那个跳掉,留给零空间那条:
+   * "被压没了的方向"比"一个等于零的特征值"更值得用图形说。
+   * 特征值本身仍然在下面的面板里列着,没有丢。
+   */
+  const eigenLines = useMemo(() => {
+    if (!info) return [];
+    if (rankVal === 2) return info.eigen.real;
+    return info.eigen.real.filter((e) => Math.abs(e.value) > 1e-9);
+  }, [info, rankVal]);
+
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [dragging, setDragging] = useState<string | null>(null);
+  const dragRef = useRef<Handle | null>(null);
+
+  /**
+   * 可以拖的点。
+   *
+   * **只有把矩阵元素写成参数名时才画手柄。** 拖动要把坐标写回去,而元素是表达式
+   * (`cos(t)`、`2*a`)—— 复合表达式没法从坐标反解出参数。所以这里只认"元素恰好
+   * 就是一个参数名"的情形。
+   *
+   * 这不是妥协,反而对得上:能拖的时候,拖出来的值**就是**参数的值 ——
+   * 模型 read_artifact 看到的 runtime 和学生屏幕上的是同一个数,不会出现两套真相。
+   */
+  const handles = useMemo<Handle[]>(() => {
+    if (!m) return [];
+    const params = spec.params ?? [];
+    /** 元素表达式恰好就是一个参数名时,才找得到可写的那个参数。 */
+    const named = (e: string) => params.find((p) => p.name === e.trim());
+    const out: Handle[] = [];
+
+    // 基向量的像。拖它就是直接摆出"矩阵的这一列去了哪儿"。
+    const column = (name: string, c: 0 | 1): Handle | null => {
+      const px = named(spec.matrix[0][c]);
+      const py = named(spec.matrix[1][c]);
+      if (!px || !py) return null;
+      return {
+        name,
+        cls: 'lin-handle',
+        hint: `拖我 —— 直接摆出基向量 ${name} 的像,矩阵跟着变`,
+        px,
+        py,
+        at: apply(m, c === 0 ? [1, 0] : [0, 1]),
+      };
+    };
+    const i = column('i', 0);
+    const j = column('j', 1);
+    if (i) out.push(i);
+    if (j) out.push(j);
+
+    // 探测向量。拖它是找零空间那条路:把 v 拖到某个方向上、Av 缩成 0,就说明
+    // 那个方向被压没了 —— 这正是"拖动输入向量 → 零空间显现"。
+    if (spec.probe) {
+      const px = named(spec.probe.x);
+      const py = named(spec.probe.y);
+      const at: Vec2 = [safeEval(spec.probe.x, scope), safeEval(spec.probe.y, scope)];
+      if (px && py && at.every(Number.isFinite)) {
+        out.push({
+          name: 'v',
+          cls: 'lin-handle probe',
+          hint: '拖我 —— 移动探测向量,看 Av 怎么跟着变。把它拖到 Av 缩成 0 的方向上,那条线就是零空间',
+          px,
+          py,
+          at,
+        });
+      }
+    }
+    return out;
+  }, [m, spec.matrix, spec.params, spec.probe, scope]);
+
+  /** 屏幕坐标 → 数学坐标。和 Plot2D 里那套换算一致(viewBox 与元素尺寸不一定相等)。 */
+  const toMath = (clientX: number, clientY: number): Vec2 | null => {
+    const el = svgRef.current;
+    if (!el) return null;
+    const rect = el.getBoundingClientRect();
+    if (!rect.width || !rect.height) return null;
+    const vx = (clientX - rect.left) * (w / rect.width);
+    const vy = (clientY - rect.top) * (HEIGHT / rect.height);
+    return [
+      view.x[0] + ((vx - PAD.l) / plotW) * (view.x[1] - view.x[0]),
+      view.y[0] + (1 - (vy - PAD.t) / plotH) * (view.y[1] - view.y[0]),
+    ];
+  };
+
+  const startDrag = (e: React.PointerEvent<SVGCircleElement>, h: Handle) => {
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragRef.current = h;
+    setDragging(h.name);
+  };
+
+  const moveDrag = (e: React.PointerEvent<SVGCircleElement>) => {
+    const h = dragRef.current;
+    if (!h) return;
+    const p = toMath(e.clientX, e.clientY);
+    if (!p) return;
+    // 连续写参数,和拖滑块走同一条路 —— 拖的过程中就要看见平面在扭
+    onParam(h.px.name, clampTo(h.px, p[0]));
+    onParam(h.py.name, clampTo(h.py, p[1]));
+  };
+
+  const endDrag = (e: React.PointerEvent<SVGCircleElement>) => {
+    const h = dragRef.current;
+    dragRef.current = null;
+    setDragging(null);
+    if (!h) return;
+    const p = toMath(e.clientX, e.clientY);
+    if (!p) return;
+    // 松手才发事件 —— 拖一次发几百条会把上下文撑爆(和滑块同一个约定)
+    emit({
+      type: 'pointDrag',
+      artifactId,
+      point: h.name,
+      xy: [clampTo(h.px, p[0]), clampTo(h.py, p[1])],
+    });
+  };
 
   const clipId = `lin-clip-${artifactId}`;
 
@@ -98,7 +234,7 @@ export function LinearView({ spec, scope, artifactId, onParam, emit }: Props) {
     <div className="linear" ref={wrapRef}>
       {spec.note && <div className="plot-note">{spec.note}</div>}
 
-      <svg viewBox={`0 0 ${w} ${HEIGHT}`} width="100%" height={HEIGHT} className="plot-svg">
+      <svg ref={svgRef} viewBox={`0 0 ${w} ${HEIGHT}`} width="100%" height={HEIGHT} className="plot-svg">
         <defs>
           <clipPath id={clipId}>
             <rect x={PAD.l} y={PAD.t} width={plotW} height={plotH} />
@@ -130,7 +266,7 @@ export function LinearView({ spec, scope, artifactId, onParam, emit }: Props) {
             />
 
             {/* 特征方向:方向不被改变的那些线 */}
-            {info?.eigen.real.map((e, i) => {
+            {eigenLines.map((e, i) => {
               const [vx, vy] = e.vector;
               const far = 1e3;
               return (
@@ -144,6 +280,17 @@ export function LinearView({ spec, scope, artifactId, onParam, emit }: Props) {
                 />
               );
             })}
+
+            {/* 零空间:整个被压到原点的那些方向。满秩时只有原点自己,没什么可画的。 */}
+            {ns?.kind === 'line' && (
+              <line
+                x1={tx(ns.dir[0] * -1e3)}
+                y1={ty(ns.dir[1] * -1e3)}
+                x2={tx(ns.dir[0] * 1e3)}
+                y2={ty(ns.dir[1] * 1e3)}
+                className="lin-null"
+              />
+            )}
 
             {/* 基向量和它们的像 */}
             <Vec from={[0, 0]} to={[1, 0]} tx={tx} ty={ty} cls="lin-basis" />
@@ -170,14 +317,31 @@ export function LinearView({ spec, scope, artifactId, onParam, emit }: Props) {
                 />
               </>
             )}
+            {/* 可以拖的点。画在最后 —— 它是交互入口,不该被任何一条线压住。
+                只有对应的矩阵元素/探测向量写成参数名时才画得出来,见 handles 那段说明。 */}
+            {handles.map((h) => (
+              <circle
+                key={h.name}
+                cx={clampCoord(tx(h.at[0]))}
+                cy={clampCoord(ty(h.at[1]))}
+                r={9}
+                className={dragging === h.name ? `${h.cls} on` : h.cls}
+                onPointerDown={(e) => startDrag(e, h)}
+                onPointerMove={moveDrag}
+                onPointerUp={endDrag}
+                onPointerCancel={endDrag}
+              >
+                <title>{h.hint}</title>
+              </circle>
+            ))}
           </g>
         )}
 
         <PlaneAxes view={view} tx={tx} ty={ty} plotW={plotW} plotH={plotH} />
       </svg>
 
-      {m && info ? (
-        <MatrixPanel m={m} d={info.det} eigen={info.eigen} />
+      {m && info && rankVal !== null && ns ? (
+        <MatrixPanel m={m} d={info.det} eigen={info.eigen} rank={rankVal} nullSpace={ns} />
       ) : (
         <div className="lin-panel lin-invalid">矩阵里有的项在当前参数下无定义</div>
       )}
@@ -259,18 +423,24 @@ function Vec({
   );
 }
 
-/** 矩阵本身、行列式、特征值 —— 学生要能把图上的现象和数字对上。 */
+/** 矩阵本身、行列式、秩、零空间、特征值 —— 学生要能把图上的现象和数字对上。 */
 function MatrixPanel({
   m,
   d,
   eigen: eig,
+  rank: rk,
+  nullSpace: ns,
 }: {
   m: Mat2;
   d: number;
   eigen: ReturnType<typeof eigen>;
+  rank: 0 | 1 | 2;
+  nullSpace: NullSpace;
 }) {
   const fmt = (n: number) => (Math.abs(n) < 1e-10 ? '0' : String(Number(n.toPrecision(4))));
-  const degenerate = Math.abs(d) < 1e-9;
+  // 和 matrix2 里用**同一个**判据。两处各写一个阈值的话,迟早出现
+  // "面板说不可逆、图上却画着满秩的网格"这种自相矛盾。
+  const degenerate = isSingular(m);
 
   return (
     <div className="lin-panel">
@@ -296,6 +466,31 @@ function MatrixPanel({
               : `面积放大 ${Math.abs(d).toPrecision(3)} 倍${d < 0 ? ',并且翻转了定向' : ''}`}
           </span>
         </div>
+
+        <div className={degenerate ? 'lin-fact warn' : 'lin-fact'}>
+          <span className="lin-fact-name">秩</span>
+          <span className="lin-fact-value">{rk}</span>
+          <span className="lin-fact-note">
+            {rk === 2
+              ? '满秩:平面还是平面'
+              : rk === 1
+                ? '像空间只剩一条过原点的直线 —— 有一个方向被整个压没了'
+                : '零矩阵:整个平面都被映到原点'}
+          </span>
+        </div>
+
+        {rk === 1 && (ns.kind === 'line' || ns.kind === 'plane') && (
+          <div className="lin-fact warn">
+            <span className="lin-fact-name">零空间</span>
+            <span className="lin-fact-value">一条线</span>
+            <span className="lin-fact-note">
+              图上那条虚线:落在它上面的向量全被映到原点。
+              <strong>它同时也是 λ=0 的那个特征方向</strong> —— 特征值等于 0
+              说的正是"这个方向被压没了"。秩 1 + 零化度 1 = 2:
+              平面本来有两个方向,一个留着,一个没了。
+            </span>
+          </div>
+        )}
 
         <div className="lin-fact">
           <span className="lin-fact-name">特征值</span>

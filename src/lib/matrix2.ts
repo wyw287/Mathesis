@@ -127,3 +127,63 @@ export function unitSquareImage(m: Mat2): [Vec2, Vec2, Vec2, Vec2] {
     apply(m, [0, 1]),
   ];
 }
+
+/**
+ * 是不是退化(不可逆)。
+ *
+ * 判据用**相对量级**,不是拿一个绝对的 1e-9 去比行列式:行列式随元素**平方**缩放,
+ * 所以元素量级 1e6 的一张好矩阵,det 轻松上 1e12;而元素全是 1e-6 的一张好矩阵,
+ * det 只有 1e-12 —— 用绝对阈值会把后者误判成退化。
+ *
+ * 界面上"det 是不是 0"和"秩是不是 2"必须用同一个判据,否则会出现
+ * "面板说不可逆、图上却画着满秩的网格"这种自相矛盾。
+ */
+export function isSingular(m: Mat2): boolean {
+  const scale = Math.max(Math.abs(m.a), Math.abs(m.b), Math.abs(m.c), Math.abs(m.d));
+  if (scale === 0) return true;
+  return Math.abs(det(m)) < 1e-9 * scale * scale;
+}
+
+/**
+ * 秩 = **像空间的维数**。
+ *
+ * 2×2 只有三种:2(满秩,平面还是平面)、1(整个平面被压到一条过原点的直线)、
+ * 0(零矩阵,一切都塌到原点)。
+ */
+export function rank(m: Mat2): 0 | 1 | 2 {
+  const scale = Math.max(Math.abs(m.a), Math.abs(m.b), Math.abs(m.c), Math.abs(m.d));
+  if (scale === 0) return 0;
+  return isSingular(m) ? 1 : 2;
+}
+
+export type NullSpace =
+  /** 满秩:只有零向量自己被映到原点 */
+  | { kind: 'point' }
+  /** 零矩阵:整个平面都被映到原点 */
+  | { kind: 'plane' }
+  /** 秩 1:一条过原点的直线被映到原点 */
+  | { kind: 'line'; dir: Vec2 };
+
+/**
+ * 零空间:被 A 映到原点的那些向量。
+ *
+ * `(b, −a)` 和 `(d, −c)` 都是候选:A·(b,−a) = (ab−ab, cb−ad),而退化时 ad = bc,
+ * 所以它确实是零。两行各自给一个候选,**取长的那个** —— 某一行恰好是零行时,
+ * 它给出的候选是零向量,拿它算方向全是数值噪声(和特征向量那边同一个坑)。
+ */
+export function nullSpace(m: Mat2): NullSpace {
+  const r = rank(m);
+  if (r === 2) return { kind: 'point' };
+  if (r === 0) return { kind: 'plane' };
+
+  const candidates: Vec2[] = [
+    [m.b, -m.a],
+    [m.d, -m.c],
+  ];
+  const pick = candidates.reduce((best, v) =>
+    Math.hypot(...v) > Math.hypot(...best) ? v : best,
+  );
+  const len = Math.hypot(...pick);
+  if (len < 1e-12) return { kind: 'plane' };
+  return { kind: 'line', dir: [pick[0] / len, pick[1] / len] };
+}

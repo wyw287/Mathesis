@@ -1633,6 +1633,45 @@ code:not(pre > code) {
   opacity: 0.9;
 }
 
+/* 零空间。用点线而不是虚线,好和特征方向(虚线)一眼分开 ——
+   秩亏时两者是同一条线,而这一条画得出来、那一条被跳过了。 */
+.lin-null {
+  stroke: #7c3aed;
+  stroke-width: 2;
+  stroke-dasharray: 2 5;
+  stroke-linecap: round;
+  opacity: 0.95;
+}
+
+/* 可以直接拖的点。和"基向量的像"同色 —— 拖的就是那个东西本身。 */
+.lin-handle {
+  fill: #dc2626;
+  stroke: #fff;
+  stroke-width: 2.5;
+  cursor: grab;
+  /* 触屏上没有这一条,拖动会被当成页面滚动 */
+  touch-action: none;
+}
+
+.lin-handle:hover,
+.lin-handle.on {
+  fill: #991b1b;
+}
+
+/* 探测向量的手柄用绿的和它自己的线对上,不然学生会以为拖的是基向量 */
+.lin-handle.probe {
+  fill: #059669;
+}
+
+.lin-handle.probe:hover,
+.lin-handle.probe.on {
+  fill: #047857;
+}
+
+.lin-handle.on {
+  cursor: grabbing;
+}
+
 .lin-basis {
   stroke: var(--faint);
   stroke-width: 1.6;

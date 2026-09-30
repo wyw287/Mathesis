@@ -73,6 +73,7 @@ function interactionNote(s: InteractionStats | undefined): string {
   const bits: string[] = [];
   if (s.confusedSteps.length) bits.push(`${s.confusedSteps.join('/')} 标记不懂`);
   if (s.paramChanges > 0) bits.push(`拖过 ${s.paramChanges} 次参数`);
+  if ((s.pointDrags ?? 0) > 0) bits.push(`拖过 ${s.pointDrags} 次图中的点`);
   if (s.expandedSteps.length) bits.push(`展开过 ${s.expandedSteps.join('/')}`);
   if (s.answers > 0) bits.push(`作答 ${s.answers} 次`);
   return bits.length ? `  · ${bits.join('，')}` : '';

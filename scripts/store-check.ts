@@ -361,6 +361,44 @@ async function main() {
     ok('清空对话之后画布还在', store().artifacts.length === 1, String(store().artifacts.length));
   }
 
+  console.log('\n拖图上的点 —— 和拖滑块分开计数');
+
+  {
+    resetStore();
+    const id = store().addArtifact(PLOT, 'A', 'ai');
+    store().pushEvent({ type: 'pointDrag', artifactId: id, point: 'i', xy: [2, 1] });
+    ok('拖点计进了统计', store().interactions[id]?.pointDrags === 1, JSON.stringify(store().interactions[id]));
+    // 拖一个点也会写两个参数,所以如果拿 paramChange 去记,一次拖动看起来像两次拖参
+    ok('没有混进参数拖动', (store().interactions[id]?.paramChanges ?? 0) === 0, JSON.stringify(store().interactions[id]));
+
+    store().pushEvent({ type: 'pointDrag', artifactId: id, point: 'j', xy: [0, 1] });
+    ok('拖两次就是 2', store().interactions[id]?.pointDrags === 2, String(store().interactions[id]?.pointDrags));
+  }
+
+  {
+    // 旧存档里的统计记录**没有这个字段**。直接 `cur.pointDrags + 1` 会得到 NaN,
+    // 而 NaN 会一路进到每一轮发给模型的画布目录里 —— 那种错很难从现象上认出来。
+    resetStore();
+    const id = store().addArtifact(PLOT, 'A', 'ai');
+    useSession.setState((s) => ({
+      interactions: {
+        ...s.interactions,
+        [id]: {
+          paramChanges: 3,
+          confusedSteps: [],
+          expandedSteps: [],
+          answers: 0,
+          lastTouchedAt: 0,
+          // 故意不给 pointDrags —— 模拟旧版本存下来的记录
+        } as never,
+      },
+    }));
+
+    store().pushEvent({ type: 'pointDrag', artifactId: id, point: 'i', xy: [1, 1] });
+    ok('旧记录缺字段时不产生 NaN', store().interactions[id]?.pointDrags === 1, String(store().interactions[id]?.pointDrags));
+    ok('原有的计数也没被抹掉', store().interactions[id]?.paramChanges === 3, String(store().interactions[id]?.paramChanges));
+  }
+
   console.log('\n待写内容能被立刻落盘');
 
   {
